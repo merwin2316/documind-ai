@@ -1,0 +1,32 @@
+# Ignore git directory
+.git
+.gitignore
+
+# Ignore env files (Secrets should NOT be in the image)
+# .env
+# .env.local
+# .env.*
+!.env.example
+
+# Ignore Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore Frontend (Backend image doesn't need it)
+frontend
+newfrontend
+
+# Ignore Docker related
+Dockerfile
+docker-compose.yml
+.dockerignore
+DEPLOYMENT.md
+TEAM_SETUP.md
+README.md
+TODO.md
+
+# Ignore IDE settings
+.vscode
+.idea

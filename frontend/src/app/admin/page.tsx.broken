@@ -1,0 +1,1010 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import {
+    fetchWithAuth,
+    listAllUsers,
+    createUser,
+    updateUser,
+    deleteUser,
+    getAdminStats,
+    listAllFolders,
+    listAllDocuments,
+    updateFolder,
+    deleteFolder,
+    getAnalytics,
+    getConversationLogs,
+    exportConversationLogs
+} from "@/lib/api";
+import { AppSidebar } from "@/components/AppSidebar";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+    DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+    Users,
+    FolderPlus,
+    BarChart3,
+    LogOut,
+    MessageSquare,
+    FileText,
+    Trash2,
+    Edit2,
+    Folder,
+    Settings,
+    Shield,
+    Download,
+    TrendingUp
+} from "lucide-react";
+
+interface User {
+    id: string;
+    email: string;
+    full_name?: string;
+    role: string;
+    created_at: string;
+}
+
+interface Stats {
+    total_users: number;
+    total_documents: number;
+    total_conversations: number;
+}
+
+interface Folder {
+    id: string;
+    name: string;
+    owner_id: string;
+    parent_id?: string;
+    allowed_roles: string[];
+    allowed_users: string[];
+    document_count?: number;
+    created_at: string;
+}
+
+interface Document {
+    id: string;
+    title: string;
+    owner_id: string;
+    folder_id?: string;
+    mime_type?: string;
+    status?: string;
+    created_at: string;
+}
+
+type TabType = "users" | "folders" | "documents" | "stats" | "analytics";
+
+export default function AdminPage() {
+    const router = useRouter();
+    const [activeTab, setActiveTab] = useState<TabType>("stats");
+    const [users, setUsers] = useState<User[]>([]);
+    const [folders, setFolders] = useState<Folder[]>([]);
+    const [documents, setDocuments] = useState<Document[]>([]);
+    const [stats, setStats] = useState<Stats | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [createUserDialogOpen, setCreateUserDialogOpen] = useState(false);
+    const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
+    const [editingFolder, setEditingFolder] = useState<Folder | null>(null);
+    const [analytics, setAnalytics] = useState<any>(null);
+    const [conversationLogs, setConversationLogs] = useState<any[]>([]);
+    const [exporting, setExporting] = useState(false);
+
+    useEffect(() => {
+        const checkSession = async () => {
+            const { data } = await supabase.auth.getSession();
+            if (!data.session) {
+                router.push("/login");
+            } else {
+                localStorage.setItem("supabase_token", data.session.access_token);
+                loadData();
+            }
+        };
+        checkSession();
+    }, [router]);
+
+    useEffect(() => {
+        if (activeTab === "users") {
+            loadUsers();
+        } else if (activeTab === "folders") {
+            loadFolders();
+        } else if (activeTab === "documents") {
+            loadDocuments();
+        } else if (activeTab === "stats") {
+            loadStats();
+        } else if (activeTab === "analytics") {
+            loadAnalytics();
+            loadConversationLogs();
+        }
+    }, [activeTab]);
+
+    const loadData = async () => {
+        await Promise.all([loadStats(), loadUsers(), loadFolders(), loadDocuments()]);
+    };
+
+    const loadStats = async () => {
+        try {
+            const statsData = await getAdminStats();
+            setStats(statsData);
+        } catch (e: any) {
+            console.error("Failed to load stats", e);
+            if (e.message?.includes("403") || e.message?.includes("permissions")) {
+                alert("Access denied. Admin role required.");
+                router.push("/chat");
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const loadUsers = async () => {
+        try {
+            const usersData = await listAllUsers();
+            setUsers(usersData);
+        } catch (e) {
+            console.error("Failed to load users", e);
+        }
+    };
+
+    const loadFolders = async () => {
+        try {
+            const foldersData = await listAllFolders();
+            setFolders(foldersData);
+        } catch (e) {
+            console.error("Failed to load folders", e);
+        }
+    };
+
+    const loadDocuments = async () => {
+        try {
+            const docsData = await listAllDocuments();
+            setDocuments(docsData);
+        } catch (e) {
+            console.error("Failed to load documents", e);
+        }
+    };
+
+    const loadAnalytics = async () => {
+        try {
+            const analyticsData = await getAnalytics();
+            setAnalytics(analyticsData);
+        } catch (e) {
+            console.error("Failed to load analytics", e);
+        }
+    };
+
+    const loadConversationLogs = async () => {
+        try {
+            const logsData = await getConversationLogs({ limit: 50 });
+            setConversationLogs(logsData.logs || []);
+        } catch (e) {
+            console.error("Failed to load conversation logs", e);
+        }
+    };
+
+    const handleExport = async (format: "jsonl" | "csv") => {
+        setExporting(true);
+        try {
+            await exportConversationLogs(format);
+        } catch (e: any) {
+            alert(e.message || "Export failed");
+            console.error(e);
+        } finally {
+            setExporting(false);
+        }
+    };
+
+    const handleCreateUser = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        const formData = new FormData(e.currentTarget);
+
+        try {
+            await createUser({
+                email: formData.get("email") as string,
+                full_name: formData.get("full_name") as string || undefined,
+                role: formData.get("role") as string || "user",
+            });
+            setCreateUserDialogOpen(false);
+            loadUsers();
+            loadStats();
+        } catch (e: any) {
+            alert(e.message || "Failed to create user");
+            console.error(e);
+        }
+    };
+
+    const handleUpdateUser = async (userId: string, field: "role" | "full_name", value: string) => {
+        try {
+            await updateUser(userId, { [field]: value });
+            loadUsers();
+        } catch (e: any) {
+            alert(e.message || "Failed to update user");
+            console.error(e);
+        }
+    };
+
+    const handleDeleteUser = async (userId: string, userEmail: string) => {
+        if (!confirm(`Are you sure you want to delete user "${userEmail}"? This action cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            await deleteUser(userId);
+            loadUsers();
+            loadStats();
+        } catch (e: any) {
+            alert(e.message || "Failed to delete user");
+            console.error(e);
+        }
+    };
+
+    const handleCreateFolder = async (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        const formData = new FormData(e.currentTarget);
+
+        try {
+            await fetchWithAuth("/folders/", {
+                method: "POST",
+                body: JSON.stringify({
+                    name: formData.get("name"),
+                    parent_id: formData.get("parent_id") || undefined,
+                }),
+            });
+            setCreateFolderDialogOpen(false);
+            loadFolders();
+        } catch (e: any) {
+            alert(e.message || "Failed to create folder");
+            console.error(e);
+        }
+    };
+
+    const handleUpdateFolderPermissions = async (folderId: string, allowedRoles: string[], allowedUsers: string[]) => {
+        try {
+            await updateFolder(folderId, {
+                allowed_roles: allowedRoles,
+                allowed_users: allowedUsers,
+            });
+            loadFolders();
+        } catch (e: any) {
+            alert(e.message || "Failed to update folder permissions");
+            console.error(e);
+        }
+    };
+
+    const handleDeleteFolder = async (folderId: string, folderName: string) => {
+        if (!confirm(`Are you sure you want to delete folder "${folderName}"?`)) {
+            return;
+        }
+
+        try {
+            await deleteFolder(folderId);
+            loadFolders();
+        } catch (e: any) {
+            alert(e.message || "Failed to delete folder");
+            console.error(e);
+        }
+    };
+
+    const handleLogout = async () => {
+        await supabase.auth.signOut();
+        localStorage.removeItem("supabase_token");
+        router.push("/login");
+    };
+
+    if (loading && !stats) {
+        return <div className="flex h-screen items-center justify-center">Loading...</div>;
+    }
+
+    return (
+        <div className="flex h-screen bg-gray-50 dark:bg-gray-900 overflow-hidden">
+            {/* App Sidebar */}
+            <AppSidebar
+                currentConversationId={null}
+                onSelectConversation={(id) => router.push(`/chat?conversation=${id}`)}
+                onNewChat={() => router.push('/chat')}
+                refreshTrigger={0}
+            />
+
+            {/* Main Admin Content */}
+            <div className="flex-1 flex flex-col overflow-y-auto">
+                {/* Header */}
+                <div className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
+                    <div className="max-w-7xl mx-auto px-8 py-4">
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
+                                    Admin Dashboard
+                                </h1>
+                                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                                    Manage users, folders, and documents
+                                </p>
+                            </div>
+                            <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => router.push("/chat")}>
+                                    <MessageSquare className="mr-2 h-4 w-4" />
+                                    Chat
+                                </Button>
+                                <Button variant="outline" onClick={() => router.push("/vault")}>
+                                    <FileText className="mr-2 h-4 w-4" />
+                                    Vault
+                                </Button>
+                                <Button variant="outline" onClick={handleLogout}>
+                                    <LogOut className="mr-2 h-4 w-4" />
+                                    Logout
+                                </Button>
+                            </div>
+                        </div >
+                    </div >
+                </div >
+
+                {/* Tabs */}
+                < div className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950" >
+                    <div className="max-w-7xl mx-auto px-8">
+                        <div className="flex gap-1">
+                            <button
+                                onClick={() => setActiveTab("stats")}
+                                className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "stats"
+                                    ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                                    : "border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                                    }`}
+                            >
+                                <BarChart3 className="inline mr-2 h-4 w-4" />
+                                Statistics
+                            </button>
+                            <button
+                                onClick={() => setActiveTab("users")}
+                                className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "users"
+                                    ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                                    : "border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                                    }`}
+                            >
+                                <Users className="inline mr-2 h-4 w-4" />
+                                Users
+                            </button>
+                            <button
+                                onClick={() => setActiveTab("folders")}
+                                className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "folders"
+                                    ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                                    : "border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                                    }`}
+                            >
+                                <Folder className="inline mr-2 h-4 w-4" />
+                                Folders
+                            </button>
+                            <button
+                                onClick={() => setActiveTab("documents")}
+                                className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "documents"
+                                    ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                                    : "border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                                    }`}
+                            >
+                                <FileText className="inline mr-2 h-4 w-4" />
+                                Documents
+                            </button>
+                            <button
+                                onClick={() => setActiveTab("analytics")}
+                                className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "analytics"
+                                    ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                                    : "border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                                    }`}
+                            >
+                                <TrendingUp className="inline mr-2 h-4 w-4" />
+                                Analytics
+                            </button>
+                        </div>
+                    </div>
+                </div >
+
+                {/* Content */}
+                < div className="max-w-7xl mx-auto p-8" >
+                    {/* Statistics Tab */}
+                    {
+                        activeTab === "stats" && stats && (
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <Card>
+                                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                            <CardTitle className="text-sm font-medium">Total Users</CardTitle>
+                                            <Users className="h-4 w-4 text-muted-foreground" />
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="text-2xl font-bold">{stats.total_users}</div>
+                                            <p className="text-xs text-muted-foreground mt-1">
+                                                Registered users
+                                            </p>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card>
+                                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                            <CardTitle className="text-sm font-medium">Documents</CardTitle>
+                                            <FileText className="h-4 w-4 text-muted-foreground" />
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="text-2xl font-bold">{stats.total_documents}</div>
+                                            <p className="text-xs text-muted-foreground mt-1">
+                                                Total documents
+                                            </p>
+                                        </CardContent>
+                                    </Card>
+
+                                    <Card>
+                                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                                            <CardTitle className="text-sm font-medium">Conversations</CardTitle>
+                                            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="text-2xl font-bold">{stats.total_conversations}</div>
+                                            <p className="text-xs text-muted-foreground mt-1">
+                                                Chat sessions
+                                            </p>
+                                        </CardContent>
+                                    </Card>
+                                </div>
+                            </div>
+                        )
+                    }
+
+                    {/* Users Tab */}
+                    {
+                        activeTab === "users" && (
+                            <Card>
+                                <CardHeader>
+                                    <div className="flex justify-between items-center">
+                                        <CardTitle>User Management</CardTitle>
+                                        <Dialog open={createUserDialogOpen} onOpenChange={setCreateUserDialogOpen}>
+                                            <DialogTrigger asChild>
+                                                <Button>
+                                                    <Users className="mr-2 h-4 w-4" />
+                                                    Create User
+                                                </Button>
+                                            </DialogTrigger>
+                                            <DialogContent>
+                                                <DialogHeader>
+                                                    <DialogTitle>Create New User</DialogTitle>
+                                                    <DialogDescription>
+                                                        Add a new user to the platform. They will be able to log in with email and password.
+                                                    </DialogDescription>
+                                                </DialogHeader>
+                                                <form onSubmit={handleCreateUser} className="space-y-4">
+                                                    <div className="grid w-full items-center gap-1.5">
+                                                        <Label htmlFor="email">Email</Label>
+                                                        <Input id="email" name="email" type="email" required />
+                                                    </div>
+                                                    <div className="grid w-full items-center gap-1.5">
+                                                        <Label htmlFor="full_name">Full Name</Label>
+                                                        <Input id="full_name" name="full_name" type="text" />
+                                                    </div>
+                                                    <div className="grid w-full items-center gap-1.5">
+                                                        <Label htmlFor="role">Role</Label>
+                                                        <select
+                                                            id="role"
+                                                            name="role"
+                                                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                                            defaultValue="user"
+                                                        >
+                                                            <option value="user">User</option>
+                                                            <option value="manager">Manager</option>
+                                                            <option value="admin">Admin</option>
+                                                        </select>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <Button type="submit" className="flex-1">
+                                                            Create User
+                                                        </Button>
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            onClick={() => setCreateUserDialogOpen(false)}
+                                                        >
+                                                            Cancel
+                                                        </Button>
+                                                    </div>
+                                                </form>
+                                            </DialogContent>
+                                        </Dialog>
+                                    </div>
+                                </CardHeader>
+                                <CardContent>
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Email</TableHead>
+                                                <TableHead>Name</TableHead>
+                                                <TableHead>Role</TableHead>
+                                                <TableHead>Created</TableHead>
+                                                <TableHead className="text-right">Actions</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {users.length === 0 ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                                                        No users found
+                                                    </TableCell>
+                                                </TableRow>
+                                            ) : (
+                                                users.map((user) => (
+                                                    <TableRow key={user.id}>
+                                                        <TableCell className="font-medium">{user.email}</TableCell>
+                                                        <TableCell>
+                                                            <Input
+                                                                value={user.full_name || ""}
+                                                                onChange={(e) => handleUpdateUser(user.id, "full_name", e.target.value)}
+                                                                onBlur={(e) => {
+                                                                    if (e.target.value !== (user.full_name || "")) {
+                                                                        handleUpdateUser(user.id, "full_name", e.target.value);
+                                                                    }
+                                                                }}
+                                                                className="w-32"
+                                                                placeholder="No name"
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <select
+                                                                value={user.role}
+                                                                onChange={(e) => handleUpdateUser(user.id, "role", e.target.value)}
+                                                                className="text-sm border rounded px-2 py-1 bg-background"
+                                                            >
+                                                                <option value="user">User</option>
+                                                                <option value="manager">Manager</option>
+                                                                <option value="admin">Admin</option>
+                                                            </select>
+                                                        </TableCell>
+                                                        <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
+                                                        <TableCell className="text-right">
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={() => handleDeleteUser(user.id, user.email)}
+                                                                className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:text-red-400"
+                                                            >
+                                                                <Trash2 className="h-4 w-4" />
+                                                            </Button>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))
+                                            )}
+                                        </TableBody>
+                                    </Table>
+                                </CardContent>
+                            </Card>
+                        )
+                    }
+
+                    {/* Folders Tab */}
+                    {
+                        activeTab === "folders" && (
+                            <Card>
+                                <CardHeader>
+                                    <div className="flex justify-between items-center">
+                                        <CardTitle>Folder Management</CardTitle>
+                                        <Dialog open={createFolderDialogOpen} onOpenChange={setCreateFolderDialogOpen}>
+                                            <DialogTrigger asChild>
+                                                <Button>
+                                                    <FolderPlus className="mr-2 h-4 w-4" />
+                                                    Create Folder
+                                                </Button>
+                                            </DialogTrigger>
+                                            <DialogContent>
+                                                <DialogHeader>
+                                                    <DialogTitle>Create New Folder</DialogTitle>
+                                                    <DialogDescription>
+                                                        Create a new folder for organizing documents.
+                                                    </DialogDescription>
+                                                </DialogHeader>
+                                                <form onSubmit={handleCreateFolder} className="space-y-4">
+                                                    <div className="grid w-full items-center gap-1.5">
+                                                        <Label htmlFor="folder_name">Folder Name</Label>
+                                                        <Input id="folder_name" name="name" type="text" required />
+                                                    </div>
+                                                    <div className="grid w-full items-center gap-1.5">
+                                                        <Label htmlFor="parent_folder">Parent Folder (Optional)</Label>
+                                                        <select
+                                                            id="parent_folder"
+                                                            name="parent_id"
+                                                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                                        >
+                                                            <option value="">None (Root)</option>
+                                                            {folders.map((folder) => (
+                                                                <option key={folder.id} value={folder.id}>
+                                                                    {folder.name}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <Button type="submit" className="flex-1">
+                                                            Create Folder
+                                                        </Button>
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            onClick={() => setCreateFolderDialogOpen(false)}
+                                                        >
+                                                            Cancel
+                                                        </Button>
+                                                    </div>
+                                                </form>
+                                            </DialogContent>
+                                        </Dialog>
+                                    </div>
+                                </CardHeader>
+                                <CardContent>
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Name</TableHead>
+                                                <TableHead>Owner</TableHead>
+                                                <TableHead>Documents</TableHead>
+                                                <TableHead>Allowed Roles</TableHead>
+                                                <TableHead>Allowed Users</TableHead>
+                                                <TableHead>Created</TableHead>
+                                                <TableHead className="text-right">Actions</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {folders.length === 0 ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                                                        No folders found
+                                                    </TableCell>
+                                                </TableRow>
+                                            ) : (
+                                                folders.map((folder) => (
+                                                    <TableRow key={folder.id}>
+                                                        <TableCell className="font-medium">
+                                                            <div className="flex items-center gap-2">
+                                                                <Folder className="h-4 w-4 text-blue-500" />
+                                                                {folder.name}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-muted-foreground">
+                                                            {users.find(u => u.id === folder.owner_id)?.email || folder.owner_id}
+                                                        </TableCell>
+                                                        <TableCell>{folder.document_count || 0}</TableCell>
+                                                        <TableCell>
+                                                            <span className="text-xs">
+                                                                {folder.allowed_roles?.length > 0
+                                                                    ? folder.allowed_roles.join(", ")
+                                                                    : "None"
+                                                                }
+                                                            </span>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <span className="text-xs">
+                                                                {folder.allowed_users?.length > 0
+                                                                    ? `${folder.allowed_users.length} user(s)`
+                                                                    : "None"
+                                                                }
+                                                            </span>
+                                                        </TableCell>
+                                                        <TableCell>{new Date(folder.created_at).toLocaleDateString()}</TableCell>
+                                                        <TableCell className="text-right">
+                                                            <div className="flex justify-end gap-1">
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    onClick={() => setEditingFolder(folder)}
+                                                                    title="Edit Permissions"
+                                                                >
+                                                                    <Settings className="h-4 w-4" />
+                                                                </Button>
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    onClick={() => handleDeleteFolder(folder.id, folder.name)}
+                                                                    className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:text-red-400"
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />
+                                                                </Button>
+                                                            </div>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))
+                                            )}
+                                        </TableBody>
+                                    </Table>
+                                </CardContent>
+                            </Card>
+                        )
+                    }
+
+                    {/* Documents Tab */}
+                    {
+                        activeTab === "documents" && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Document Management</CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Title</TableHead>
+                                                <TableHead>Owner</TableHead>
+                                                <TableHead>Folder</TableHead>
+                                                <TableHead>Type</TableHead>
+                                                <TableHead>Status</TableHead>
+                                                <TableHead>Created</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {documents.length === 0 ? (
+                                                <TableRow>
+                                                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                                                        No documents found
+                                                    </TableCell>
+                                                </TableRow>
+                                            ) : (
+                                                documents.map((doc) => (
+                                                    <TableRow key={doc.id}>
+                                                        <TableCell className="font-medium">{doc.title}</TableCell>
+                                                        <TableCell className="text-sm text-muted-foreground">
+                                                            {users.find(u => u.id === doc.owner_id)?.email || doc.owner_id}
+                                                        </TableCell>
+                                                        <TableCell className="text-sm text-muted-foreground">
+                                                            {doc.folder_id
+                                                                ? folders.find(f => f.id === doc.folder_id)?.name || "Unknown"
+                                                                : "None"
+                                                            }
+                                                        </TableCell>
+                                                        <TableCell className="text-sm">
+                                                            {doc.mime_type?.split('/')[1]?.toUpperCase() || 'Unknown'}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <span className={`text-xs px-2 py-1 rounded ${doc.status === "completed"
+                                                                ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                                                                : doc.status === "failed"
+                                                                    ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                                                                    : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+                                                                }`}>
+                                                                {doc.status || "processing"}
+                                                            </span>
+                                                        </TableCell>
+                                                        <TableCell>{new Date(doc.created_at).toLocaleDateString()}</TableCell>
+                                                    </TableRow>
+                                                ))
+                                            )}
+                                        </TableBody>
+                                    </Table>
+                                </CardContent>
+                            </Card>
+                        )
+                    }
+
+                    {/* Analytics Tab */}
+                    {
+                        activeTab === "analytics" && (
+                            <div className="space-y-6">
+                                {/* Analytics Summary */}
+                                {analytics && (
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <Card>
+                                            <CardHeader className="pb-2">
+                                                <CardTitle className="text-sm font-medium">Total Logs</CardTitle>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <div className="text-2xl font-bold">{analytics.total_logs || 0}</div>
+                                                <p className="text-xs text-muted-foreground mt-1">Conversation entries</p>
+                                            </CardContent>
+                                        </Card>
+                                        <Card>
+                                            <CardHeader className="pb-2">
+                                                <CardTitle className="text-sm font-medium">Unique Users</CardTitle>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <div className="text-2xl font-bold">{analytics.unique_users || 0}</div>
+                                                <p className="text-xs text-muted-foreground mt-1">Active users</p>
+                                            </CardContent>
+                                        </Card>
+                                        <Card>
+                                            <CardHeader className="pb-2">
+                                                <CardTitle className="text-sm font-medium">Avg Response Length</CardTitle>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <div className="text-2xl font-bold">{analytics.avg_response_length || 0}</div>
+                                                <p className="text-xs text-muted-foreground mt-1">Characters</p>
+                                            </CardContent>
+                                        </Card>
+                                        <Card>
+                                            <CardHeader className="pb-2">
+                                                <CardTitle className="text-sm font-medium">Avg Citations</CardTitle>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <div className="text-2xl font-bold">{analytics.avg_citations_per_response || 0}</div>
+                                                <p className="text-xs text-muted-foreground mt-1">Per response</p>
+                                            </CardContent>
+                                        </Card>
+                                    </div>
+                                )}
+
+                                {/* Export Section */}
+                                <Card>
+                                    <CardHeader>
+                                        <div className="flex justify-between items-center">
+                                            <CardTitle>Export Conversation Logs</CardTitle>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    onClick={() => handleExport("jsonl")}
+                                                    disabled={exporting}
+                                                    variant="outline"
+                                                >
+                                                    <Download className="mr-2 h-4 w-4" />
+                                                    Export JSONL
+                                                </Button>
+                                                <Button
+                                                    onClick={() => handleExport("csv")}
+                                                    disabled={exporting}
+                                                    variant="outline"
+                                                >
+                                                    <Download className="mr-2 h-4 w-4" />
+                                                    Export CSV
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <p className="text-sm text-muted-foreground">
+                                            Export conversation logs for training data preparation. JSONL format is recommended for fine-tuning language models.
+                                        </p>
+                                    </CardContent>
+                                </Card>
+
+                                {/* Recent Conversation Logs */}
+                                <Card>
+                                    <CardHeader>
+                                        <CardTitle>Recent Conversation Logs</CardTitle>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <Table>
+                                            <TableHeader>
+                                                <TableRow>
+                                                    <TableHead>User</TableHead>
+                                                    <TableHead>Prompt</TableHead>
+                                                    <TableHead>Response Length</TableHead>
+                                                    <TableHead>Citations</TableHead>
+                                                    <TableHead>Documents</TableHead>
+                                                    <TableHead>Created</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {conversationLogs.length === 0 ? (
+                                                    <TableRow>
+                                                        <TableCell colSpan={6} className="text-center text-muted-foreground">
+                                                            No conversation logs found
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ) : (
+                                                    conversationLogs.map((log) => (
+                                                        <TableRow key={log.id}>
+                                                            <TableCell className="text-sm">
+                                                                {users.find(u => u.id === log.user_id)?.email || log.user_id}
+                                                            </TableCell>
+                                                            <TableCell className="max-w-xs truncate text-sm">
+                                                                {log.user_prompt?.substring(0, 100) || ""}...
+                                                            </TableCell>
+                                                            <TableCell className="text-sm">
+                                                                {log.assistant_response?.length || 0} chars
+                                                            </TableCell>
+                                                            <TableCell className="text-sm">
+                                                                {log.citations?.length || 0}
+                                                            </TableCell>
+                                                            <TableCell className="text-sm">
+                                                                {log.retrieved_documents?.length || 0}
+                                                            </TableCell>
+                                                            <TableCell className="text-sm">
+                                                                {new Date(log.created_at).toLocaleDateString()}
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))
+                                                )}
+                                            </TableBody>
+                                        </Table>
+                                    </CardContent>
+                                </Card>
+                            </div>
+                        )
+                    }
+
+                    {/* Folder Permissions Dialog */}
+                    {
+                        editingFolder && (
+                            <Dialog open={!!editingFolder} onOpenChange={() => setEditingFolder(null)}>
+                                <DialogContent className="max-w-2xl">
+                                    <DialogHeader>
+                                        <DialogTitle>Edit Folder Permissions: {editingFolder.name}</DialogTitle>
+                                        <DialogDescription>
+                                            Configure who can access this folder.
+                                        </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <Label>Allowed Roles</Label>
+                                            <div className="flex gap-2 mt-2">
+                                                {["admin", "manager", "user"].map((role) => (
+                                                    <label key={role} className="flex items-center gap-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={editingFolder.allowed_roles?.includes(role) || false}
+                                                            onChange={(e) => {
+                                                                const newRoles = e.target.checked
+                                                                    ? [...(editingFolder.allowed_roles || []), role]
+                                                                    : editingFolder.allowed_roles?.filter(r => r !== role) || [];
+                                                                setEditingFolder({ ...editingFolder, allowed_roles: newRoles });
+                                                            }}
+                                                        />
+                                                        <span className="text-sm capitalize">{role}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <Label>Allowed Users</Label>
+                                            <div className="mt-2 space-y-2 max-h-48 overflow-y-auto">
+                                                {users.map((user) => (
+                                                    <label key={user.id} className="flex items-center gap-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={editingFolder.allowed_users?.includes(user.id) || false}
+                                                            onChange={(e) => {
+                                                                const newUsers = e.target.checked
+                                                                    ? [...(editingFolder.allowed_users || []), user.id]
+                                                                    : editingFolder.allowed_users?.filter(u => u !== user.id) || [];
+                                                                setEditingFolder({ ...editingFolder, allowed_users: newUsers });
+                                                            }}
+                                                        />
+                                                        <span className="text-sm">{user.email}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <Button
+                                                onClick={() => {
+                                                    if (editingFolder) {
+                                                        handleUpdateFolderPermissions(
+                                                            editingFolder.id,
+                                                            editingFolder.allowed_roles || [],
+                                                            editingFolder.allowed_users || []
+                                                        );
+                                                        setEditingFolder(null);
+                                                    }
+                                                }}
+                                                className="flex-1"
+                                            >
+                                                Save Permissions
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                onClick={() => setEditingFolder(null)}
+                                            >
+                                                Cancel
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </DialogContent>
+                            </Dialog>
+                        )
+                    }
+                </div >
+            </div >
+            );
+}
