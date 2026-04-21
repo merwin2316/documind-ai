@@ -1,9 +1,8 @@
 """
-RAG service using OpenAI for question answering with citations.
+RAG service for question answering with citations.
 Orchestrates multiple agents: Intent, Answer, and Transform.
 """
 from typing import List, Dict, Optional
-from openai import AsyncOpenAI
 from app.services.vector_store import VectorStore
 from app.database.supabase_client import get_supabase_client
 from app.agents.intent_agent import IntentAgent
@@ -16,11 +15,6 @@ class RAGService:
     """Service for RAG-based question answering using multi-agent architecture."""
     
     def __init__(self):
-        # OpenAI client for RAG service (not directly used, but kept for compatibility)
-        self.openai_client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            timeout=120.0  # 2 minutes for RAG operations
-        )
         self.vector_store = VectorStore()
         self.intent_agent = IntentAgent()
         self.answer_agent = AnswerAgent()
@@ -559,17 +553,16 @@ USER INSTRUCTION:
 Transform the previous response according to the user instruction.
 Do not add new information. Do not convert descriptive paragraphs into bullets unless they contain enumerable items."""
 
-        response = await self.openai_client.chat.completions.create(
-            model=settings.OPENAI_CHAT_MODEL,
+        from shared.llm.factory import get_llm_provider
+        llm = get_llm_provider()
+        transformed = await llm.generate(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.1,
-            max_tokens=500
+            max_tokens=500,
         )
-        
-        transformed = response.choices[0].message.content
         return self._sanitize_output(transformed)
     
     def _sanitize_output(self, text: str) -> str:
@@ -598,12 +591,12 @@ Do not add new information. Do not convert descriptive paragraphs into bullets u
         has_context: bool = True
     ) -> tuple[str, List[int]]:
         """
-        Generate answer using OpenAI with citation requirements.
+        Generate answer using the configured LLM provider with citation requirements.
         
         Returns:
             (answer_text, list_of_citation_ids_referenced)
         """
-        system_prompt = """You are a conversational AI assistant that behaves like ChatGPT.
+        system_prompt = """You are a conversational AI assistant.
 
 CORE BEHAVIOR:
 - Always understand the user's intent before formatting.
@@ -613,18 +606,8 @@ CORE BEHAVIOR:
 
 FORMATTING RULES:
 - Use paragraphs for explanations and descriptions.
-- Use bullet points ONLY for naturally enumerable items
-  (movies, names, steps, features, rankings).
+- Use bullet points ONLY for naturally enumerable items.
 - Never convert descriptive paragraphs into bullets.
-- Mixing paragraphs + bullets is encouraged when natural.
-
-FOLLOW-UP RULES:
-- Only treat very short commands like:
-  "list them", "shorten this", "names only"
-  as follow-up transformations.
-- Follow-up commands MUST reference previous content.
-- If a user restates a subject ("films he acted"),
-  generate a NEW answer instead of transforming.
 
 DOCUMENT RULES:
 - Use document context silently.
@@ -632,9 +615,8 @@ DOCUMENT RULES:
 - If documents do not contain the answer, use general knowledge confidently.
 
 STYLE:
-- Friendly, clean, human-like responses 😊
-- Clear spacing, readable formatting
-- Optional 1–2 emojis per response"""
+- Friendly, clean, human-like responses
+- Clear spacing, readable formatting"""
 
         # Build user prompt based on context
         if has_context and context:
@@ -644,31 +626,25 @@ STYLE:
 USER QUESTION:
 {question}
 
-Answer the question naturally like ChatGPT.
-Use paragraphs for explanations and bullets for lists as appropriate.
-Use your own knowledge; treat the context as optional hints only."""
+Answer the question naturally.
+Use paragraphs for explanations and bullets for lists as appropriate."""
         else:
-            # No document context - answer using general knowledge
             user_prompt = f"""USER QUESTION:
 {question}
 
-Answer the question naturally like ChatGPT.
-Use paragraphs for explanations and bullets for lists as appropriate.
-Use your knowledge to provide a complete answer."""
+Answer the question naturally.
+Use paragraphs for explanations and bullets for lists as appropriate."""
 
-        response = await self.openai_client.chat.completions.create(
-            model=settings.OPENAI_CHAT_MODEL,
+        from shared.llm.factory import get_llm_provider
+        llm = get_llm_provider()
+        answer = await llm.generate(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.1,  # Lower temperature for more factual answers
-            max_tokens=1000
+            temperature=0.1,
+            max_tokens=1000,
         )
-        
-        answer = response.choices[0].message.content
-        
-        # Sanitize output
         answer = self._sanitize_output(answer)
         
         # Extract citation IDs from answer (supports multiple formats)
@@ -883,13 +859,18 @@ Use your knowledge to provide a complete answer."""
     
     async def _get_user_documents(self, user_id: str) -> List[Dict]:
         """Get user's document list from database."""
-        supabase = await get_supabase_client()
-        
-        result = supabase.table("documents").select(
-            "document_id, name, file_size, status, uploaded_at"
-        ).eq("user_id", user_id).order("uploaded_at", desc=True).execute()
-        
-        return result.data if result.data else []
+        from app.database.supabase_client import is_local_mode
+
+        if is_local_mode():
+            from app.database.supabase_client import get_local_db
+            docs, _ = get_local_db().list_documents(user_id, 0, 9999)
+            return docs
+        else:
+            supabase = await get_supabase_client()
+            result = supabase.table("documents").select(
+                "document_id, name, file_size, status, uploaded_at"
+            ).eq("user_id", user_id).order("uploaded_at", desc=True).execute()
+            return result.data if result.data else []
     
     async def _answer_about_document_vault(
         self,
@@ -956,17 +937,16 @@ USER QUESTION:
 
 Answer the question about the user's documents naturally and helpfully. Use paragraphs for explanations, and use bullets only when listing multiple documents."""
 
-        response = await self.openai_client.chat.completions.create(
-            model=settings.OPENAI_CHAT_MODEL,
+        from shared.llm.factory import get_llm_provider
+        llm = get_llm_provider()
+        return await llm.generate(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.3,
-            max_tokens=500
+            max_tokens=500,
         )
-        
-        return response.choices[0].message.content
 
 
     async def _fetch_neighbor_chunks(self, retrieved_chunks: List[Dict]) -> List[Dict]:
@@ -980,14 +960,17 @@ Answer the question about the user's documents naturally and helpfully. Use para
         """
         if not retrieved_chunks:
             return []
-            
+
+        from app.database.supabase_client import is_local_mode
+
+        # In local mode, skip neighbor expansion (chunks stored in Qdrant only)
+        if is_local_mode():
+            return retrieved_chunks
+
         supabase = await get_supabase_client()
         expanded_chunks = []
         processed_ids = set()
-        
-        # Sort chunks by document and position to optimize processing
-        # (Though we process them individually for simplicity and robustness)
-        
+
         import logging
         logger = logging.getLogger(__name__)
         

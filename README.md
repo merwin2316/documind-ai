@@ -1,28 +1,35 @@
 # DocuMind AI 🧠
 
-**An intelligent document analysis system powered by RAG (Retrieval-Augmented Generation).**
+> **A RAG-based document intelligence system with modular LLM support (Ollama/Groq), designed for fully local and cost-efficient deployment.**
 
-DocuMind AI ingests, processes, and retrieves knowledge from PDF and DOCX documents. It features a multi-agent RAG pipeline, an AI-organized Knowledge Base, and a full-featured Chat interface with real-time streaming.
+DocuMind AI ingests, processes, and retrieves knowledge from PDF and DOCX documents using **local LLMs via Ollama** — no paid API keys required. It features a multi-agent RAG pipeline, an AI-organized Knowledge Base, and a full-featured Chat interface with real-time streaming.
+
+**No OpenAI. No paid APIs. Fully local. Recruiter-ready.**
 
 ---
 
-## ✨ Features
+## 💡 Key Features
 
-### 🔍 Intelligent RAG System
-- **Multi-Agent Architecture** — Specialized agents (Intent, Answer, Transform) for high-precision answers
-- **Token-Based Chunking** — Semantic sentence splitting (800 tokens/chunk) for optimal context
-- **Inline Citations** — Every answer cites exact pages and passages
+- 🔍 **RAG-based document intelligence system** — upload and query PDF, DOCX files
+- 🔗 **Hybrid search** — semantic vector search + metadata filtering
+- 📝 **Citation-aware responses** — every answer cites exact pages and passages
+- 🤖 **Modular LLM provider** — swap between Ollama (local) and Groq (cloud) with one env var
+- 🏠 **Fully local deployment** — no cloud dependency, runs on your machine
+- 📚 **Smart Knowledge Base** — AI auto-categorizes, tags, and links related documents
+- 💬 **Streaming Chat** — real-time token streaming via SSE with conversation memory
 
-### 📚 Smart Knowledge Base
-- **Auto-Categorization** — AI sorts documents into categories (Legal, Financial, HR, etc.)
-- **Smart Tagging** — Extracts key topics/tags for powerful filtering
-- **Related Documents** — Finds semantically similar documents via vector similarity
-- **Processing Pipeline** — Track status, page counts, and chunk statistics
+---
 
-### 💬 Chat Interface
-- **Conversation Memory** — Contextual follow-up questions with pronoun resolution
-- **Streaming Responses** — Real-time token streaming via SSE
-- **Chat Management** — Pin, rename, and delete conversations
+## 🤖 LLM Support
+
+DocuMind AI supports multiple LLM providers:
+
+| Provider | Type | Models | Cost |
+|:---------|:-----|:-------|:-----|
+| **Ollama** (default) | Local | llama3, nomic-embed-text | **Free** |
+| **Groq** (optional) | Cloud | llama-3.3-70b-versatile | **Free tier** |
+
+> **No dependency on paid APIs like OpenAI.** The entire system runs on free, open-source models.
 
 ---
 
@@ -30,26 +37,27 @@ DocuMind AI ingests, processes, and retrieves knowledge from PDF and DOCX docume
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Frontend   │────▶│  FastAPI API  │────▶│   OpenAI     │
-│  (Next.js)   │     │  (Python)    │     │  (GPT-4o)    │
+│   Frontend   │────▶│  FastAPI API  │────▶│   LLM Layer  │
+│  (Next.js)   │     │  (Python)    │     │ Ollama/Groq  │
 └──────────────┘     └──────┬───────┘     └──────────────┘
                             │
-                    ┌───────┼───────┐
-                    ▼       ▼       ▼
-              ┌─────────┐ ┌─────┐ ┌──────────┐
-              │ Supabase│ │Qdrant│ │ Supabase │
-              │  (PgSQL)│ │(Vec) │ │ Storage  │
-              └─────────┘ └─────┘ └──────────┘
+                    ┌───────┼────────┐
+                    ▼       ▼        ▼
+              ┌─────────┐ ┌─────┐ ┌────────────┐
+              │ SQLite  │ │Qdrant│ │ Local/Opt  │
+              │ (Meta)  │ │(Vec) │ │ Storage    │
+              └─────────┘ └─────┘ └────────────┘
 ```
 
-| Layer       | Technology                           |
-| :---------- | :----------------------------------- |
-| Backend     | Python 3.11+, FastAPI                |
-| Frontend    | Next.js 15, TypeScript, Tailwind CSS |
-| Database    | Supabase (PostgreSQL + Auth)         |
-| Vector DB   | Qdrant                               |
-| AI Engine   | OpenAI GPT-4o + text-embedding-3-large |
-| File Storage| Supabase Storage                     |
+| Layer        | Technology                                      |
+| :----------- | :---------------------------------------------- |
+| Backend      | Python 3.11+, FastAPI                            |
+| Frontend     | Next.js 15, TypeScript, Tailwind CSS             |
+| Database     | SQLite (default) / Supabase (optional)           |
+| Vector DB    | Qdrant                                           |
+| AI Engine    | Ollama (local, free) / Groq (free cloud API)     |
+| Embeddings   | Ollama nomic-embed-text (768 dims)               |
+| File Storage | Local filesystem / Supabase Storage (optional)   |
 
 ---
 
@@ -59,54 +67,87 @@ DocuMind AI ingests, processes, and retrieves knowledge from PDF and DOCX docume
 - Python 3.10+
 - Node.js 18+
 - Docker (for Qdrant)
+- [Ollama](https://ollama.com/download) (for local LLM)
+
+---
 
 ### 1. Backend Setup
+
 ```bash
-# Clone & enter
-git clone https://github.com/your-username/DocuMindAI.git
-cd DocuMindAI
+git clone https://github.com/merwin2316/documind-ai.git
+cd documind-ai
 
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+venv\Scripts\activate   # Windows
+# source venv/bin/activate  # Mac/Linux
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Configure environment
 cp .env.example .env
-# Edit .env with your API keys (Supabase, OpenAI, Qdrant)
+```
 
-# Start Qdrant (Vector DB)
+Edit `.env` (minimum required):
+```env
+MODEL_PROVIDER=ollama
+OLLAMA_MODEL=llama3
+DATABASE_URL=sqlite:///./documind.db
+```
+
+### 2. Start Services
+
+```bash
+# Start Qdrant (vector database)
 docker run -d -p 6333:6333 qdrant/qdrant
 
-# Start API Server
+# Pull and start Ollama models
+ollama pull llama3
+ollama pull nomic-embed-text
+
+# Start backend
 python run.py
-# → http://localhost:8000
-# → Docs: http://localhost:8000/docs
 ```
 
-### 2. Database Setup
-Run the SQL schema in your Supabase SQL editor:
-```bash
-# File: app/database/schema.sql
-```
+- **API**: http://localhost:8000
+- **Docs**: http://localhost:8000/docs
 
 ### 3. Frontend Setup
+
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Configure environment
-cp .env.example .env.local
-# Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-# Start dev server
 npm run dev
-# → http://localhost:3000
 ```
+
+- **Frontend**: http://localhost:3000
+
+---
+
+## 🔧 LLM Configuration
+
+### Option A: Ollama (Default — Local, Free)
+```env
+MODEL_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+```
+
+### Option B: Groq (Cloud, Free Tier)
+```env
+MODEL_PROVIDER=groq
+GROQ_API_KEY=gsk_your_key_here
+GROQ_MODEL=llama-3.3-70b-versatile
+# Note: Groq has no embedding API — Ollama is still needed for embeddings
+```
+
+### Troubleshooting
+
+| Problem | Solution |
+|:--------|:---------|
+| "Cannot connect to Ollama" | Run `ollama serve` or check installation |
+| "Model not found" | Run `ollama pull llama3` and `ollama pull nomic-embed-text` |
+| Slow responses | Try a smaller model: `OLLAMA_MODEL=llama3:8b` |
+| Want cloud speed | Switch to Groq: `MODEL_PROVIDER=groq` |
 
 ---
 
@@ -119,7 +160,6 @@ npm run dev
 | `GET`    | `/api/v1/documents/`                  | List user's documents          |
 | `GET`    | `/api/v1/documents/{id}`              | Get document details           |
 | `DELETE` | `/api/v1/documents/{id}`              | Delete document + chunks       |
-| `GET`    | `/api/v1/documents/{id}/download-url` | Signed download URL            |
 
 ### Chat
 | Method   | Endpoint                              | Description                    |
@@ -127,8 +167,7 @@ npm run dev
 | `POST`   | `/api/v1/chat/message`                | Send message, get RAG response |
 | `POST`   | `/api/v1/chat/stream`                 | Stream response via SSE        |
 | `GET`    | `/api/v1/chat/conversations`          | List conversations             |
-| `GET`    | `/api/v1/chat/conversations/{id}`     | Get conversation + messages    |
-| `PUT`    | `/api/v1/chat/conversations/{id}`     | Update title / pin status      |
+| `PUT`    | `/api/v1/chat/conversations/{id}`     | Update title / pin             |
 | `DELETE` | `/api/v1/chat/conversations/{id}`     | Delete conversation            |
 
 ### Knowledge Base
@@ -137,7 +176,6 @@ npm run dev
 | `GET`    | `/api/v1/knowledge-base/categories`            | Categories + counts      |
 | `GET`    | `/api/v1/knowledge-base/documents`             | Filter by category/tags  |
 | `GET`    | `/api/v1/knowledge-base/tags`                  | All tags + frequency     |
-| `GET`    | `/api/v1/knowledge-base/documents/{id}/related`| Related documents        |
 
 ---
 
@@ -148,58 +186,47 @@ DocuMindAI/
 ├── app/
 │   ├── agents/              # AI agents (intent, answer, transform, categorization)
 │   ├── api/v1/              # FastAPI route handlers
-│   ├── database/            # Supabase client + SQL schema
-│   ├── middleware/          # JWT auth middleware
+│   ├── database/            # SQLite local DB + optional Supabase client
+│   ├── middleware/          # Auth (dev bypass in local mode)
 │   ├── models/              # Pydantic data models
-│   ├── services/            # Core business logic
-│   │   ├── rag_service.py       # RAG orchestrator
-│   │   ├── vector_store.py      # Qdrant operations
-│   │   ├── document_processor.py# PDF/DOCX chunking
-│   │   ├── document_service.py  # Document CRUD
-│   │   └── websocket_manager.py # Real-time updates
-│   └── main.py              # FastAPI app entry point
+│   ├── services/            # Core logic (RAG, vector store, documents)
+│   └── main.py              # FastAPI entry point
+├── shared/
+│   └── llm/                 # LLM provider abstraction layer
+│       ├── base.py              # Abstract interface
+│       ├── ollama_provider.py   # Ollama (local, default)
+│       ├── groq_provider.py     # Groq (cloud fallback)
+│       └── factory.py           # Provider factory
 ├── frontend/                # Next.js frontend
-├── tests/                   # Regression tests
-├── config.py                # Settings from .env
-├── run.py                   # Dev server runner
-├── requirements.txt         # Python dependencies
-├── Dockerfile               # Backend container
+├── config.py                # Settings (all optional w/ defaults)
+├── requirements.txt         # Python deps (no OpenAI!)
 └── .env.example             # Environment template
 ```
 
 ---
 
-## ⚙️ Configuration
-
-Core RAG parameters (set via environment or `config.py` defaults):
-
-| Variable           | Default | Description                    |
-| :----------------- | :------ | :----------------------------- |
-| `CHUNK_SIZE`       | 800     | Tokens per chunk               |
-| `CHUNK_OVERLAP`    | 150     | Overlap tokens for context     |
-| `TOP_K_RETRIEVAL`  | 15      | Chunks to retrieve per query   |
-| `CHUNK_METHOD`     | token   | `token` or `character`         |
-| `SEMANTIC_SPLITTING` | True  | Split at sentence boundaries   |
-
----
-
-## 🧪 Testing
+## 🐳 Docker (One Command)
 
 ```bash
-pytest tests/ -v
+docker-compose up
 ```
 
 ---
 
-## 🐳 Docker
+## ⚙️ Optional: Supabase Mode
 
-```bash
-# Build backend
-docker build -t documind-ai .
-
-# Run with env file
-docker run --env-file .env -p 8000:8080 documind-ai
+For production auth and cloud storage, set these in `.env`:
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-anon-key
+SUPABASE_SERVICE_KEY=your-service-role-key
+SUPABASE_JWT_SECRET=your-jwt-secret
 ```
+
+When Supabase is not configured, the system automatically uses:
+- **SQLite** for metadata storage
+- **Local filesystem** for document files
+- **Dev user bypass** for authentication
 
 ---
 

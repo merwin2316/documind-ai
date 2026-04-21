@@ -1,6 +1,6 @@
 """
-Configuration management for the DocuMind AI backend.
-Loads all settings from environment variables for security.
+Configuration management for DocuMind AI.
+Environment-driven, modular, and demo-friendly.
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
@@ -8,44 +8,69 @@ from typing import Optional
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    
-    # Supabase Configuration
-    SUPABASE_URL: str
-    SUPABASE_KEY: str
-    SUPABASE_SERVICE_KEY: str
-    SUPABASE_JWT_SECRET: str
-    
-    # OpenAI Configuration
-    OPENAI_API_KEY: str
-    
-    # Qdrant Configuration
+
+    # -----------------------------
+    # Optional: Supabase (NOT required)
+    # -----------------------------
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_KEY: Optional[str] = None
+    SUPABASE_SERVICE_KEY: Optional[str] = None
+    SUPABASE_JWT_SECRET: Optional[str] = None
+
+    # -----------------------------
+    # Vector DB (Required for RAG)
+    # -----------------------------
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: Optional[str] = None
-    
-    # Application Configuration
+
+    # -----------------------------
+    # Application
+    # -----------------------------
     ENVIRONMENT: str = "development"
-    DEBUG: bool = False
+    DEBUG: bool = True
     API_V1_PREFIX: str = "/api/v1"
-    ADMIN_SECRET_KEY: str  # Required — must be set in .env
+    ADMIN_SECRET_KEY: str = "dev_secret"   # fallback for local
     FRONTEND_URL: Optional[str] = None
-    
-    # Database (PostgreSQL via Supabase)
-    DATABASE_URL: str
-    
-    # OpenAI Model Configuration
-    OPENAI_CHAT_MODEL: str = "gpt-4o"
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-large"  # 3072 dimensions
-    
+
+    # -----------------------------
+    # Database (Optional for demo)
+    # -----------------------------
+    DATABASE_URL: str = "sqlite:///./documind.db"
+
+    # -----------------------------
+    # LLM Provider
+    # -----------------------------
+    MODEL_PROVIDER: str = "ollama"  # "ollama" | "groq"
+
+    # Ollama (local, default)
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "llama3"
+    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
+
+    # Groq (optional)
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+
+    # -----------------------------
     # RAG Configuration
+    # -----------------------------
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
-    TOP_K_RETRIEVAL: int = 15
+    TOP_K_RETRIEVAL: int = 10
     CHUNK_METHOD: str = "token"
     SEMANTIC_SPLITTING: bool = True
-    
-    # Supabase Storage
+
+    # -----------------------------
+    # Storage
+    # -----------------------------
     STORAGE_BUCKET: str = "documents"
-    
+    LOCAL_STORAGE_PATH: str = "./storage"
+
+    @property
+    def use_supabase(self) -> bool:
+        """Check if Supabase is configured."""
+        return bool(self.SUPABASE_URL and self.SUPABASE_KEY)
+
     class Config:
         env_file = ".env"
         case_sensitive = True

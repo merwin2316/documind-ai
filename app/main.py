@@ -12,6 +12,7 @@ from config import settings
 from fastapi import WebSocket, WebSocketDisconnect
 from app.services.websocket_manager import get_connection_manager
 import logging
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -151,71 +152,81 @@ async def health_check():
 async def reset_all_data(current_user: User = Depends(get_current_user)):
     """
     Reset endpoint: Delete all files and conversations for the current user.
-    
-    **WARNING**: Permanently deletes all documents, conversations, messages,
-    and citations for the authenticated user.
+    Works in both Supabase and local mode.
     """
-    from app.database.supabase_client import get_supabase_client
+    from app.database.supabase_client import is_local_mode, get_supabase_client, get_local_db
     from app.services.vector_store import VectorStore
-    
-    supabase = await get_supabase_client()
+    import shutil
+
     user_id = current_user.user_id
     vector_store = VectorStore()
-    
-    deleted_counts = {
-        "documents": 0,
-        "conversations": 0,
-        "chunks": 0
-    }
-    
+    deleted_counts = {"documents": 0, "conversations": 0, "chunks": 0}
+
     try:
-        # 1. Get all documents for user
-        docs_result = supabase.table("documents").select("document_id").eq("user_id", user_id).execute()
-        document_ids = [doc["document_id"] for doc in (docs_result.data or [])]
-        deleted_counts["documents"] = len(document_ids)
-        
-        # 2. Delete all chunks from Qdrant
-        for doc_id in document_ids:
+        if is_local_mode():
+            db = get_local_db()
+            docs, _ = db.list_documents(user_id)
+            deleted_counts["documents"] = len(docs)
+
+            for doc in docs:
+                try:
+                    await vector_store.delete_document_chunks(doc["document_id"], user_id)
+                    deleted_counts["chunks"] += 1
+                except Exception as e:
+                    logger.warning(f"Error deleting chunks: {e}")
+
+            # Delete local files
+            user_storage = os.path.join(settings.LOCAL_STORAGE_PATH, user_id)
+            if os.path.exists(user_storage):
+                shutil.rmtree(user_storage, ignore_errors=True)
+
+            # Delete from SQLite
+            import sqlite3
+            conn = sqlite3.connect("./documind.db")
+            convs = conn.execute("SELECT COUNT(*) FROM conversations WHERE user_id = ?", (user_id,)).fetchone()[0]
+            deleted_counts["conversations"] = convs
+            conn.execute("DELETE FROM messages WHERE conversation_id IN (SELECT conversation_id FROM conversations WHERE user_id = ?)", (user_id,))
+            conn.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM document_chunks WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM citations WHERE document_id IN (SELECT document_id FROM documents WHERE user_id = ?)", (user_id,))
+            conn.execute("DELETE FROM documents WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
+        else:
+            supabase = await get_supabase_client()
+
+            docs_result = supabase.table("documents").select("document_id").eq("user_id", user_id).execute()
+            document_ids = [doc["document_id"] for doc in (docs_result.data or [])]
+            deleted_counts["documents"] = len(document_ids)
+
+            for doc_id in document_ids:
+                try:
+                    await vector_store.delete_document_chunks(doc_id, user_id)
+                    deleted_counts["chunks"] += 1
+                except Exception as e:
+                    logger.warning(f"Error deleting chunks for {doc_id}: {e}")
+
+            if document_ids:
+                supabase.table("documents").delete().eq("user_id", user_id).execute()
+
+            convs_result = supabase.table("conversations").select("conversation_id").eq("user_id", user_id).execute()
+            deleted_counts["conversations"] = len(convs_result.data or [])
+            if deleted_counts["conversations"] > 0:
+                supabase.table("conversations").delete().eq("user_id", user_id).execute()
+
             try:
-                await vector_store.delete_document_chunks(doc_id, user_id)
-                deleted_counts["chunks"] += 1
+                storage_files = supabase.storage.from_(settings.STORAGE_BUCKET).list()
+                if storage_files:
+                    user_files = [f for f in storage_files if user_id in f.get("name", "")]
+                    for f in user_files:
+                        supabase.storage.from_(settings.STORAGE_BUCKET).remove([f["name"]])
             except Exception as e:
-                logger.warning(f"Error deleting chunks for document {doc_id}: {str(e)}")
-        
-        # 3. Delete documents from Supabase (cascades to pages)
-        if document_ids:
-            supabase.table("documents").delete().eq("user_id", user_id).execute()
-        
-        # 4. Delete conversations (cascades to messages and citations)
-        convs_result = supabase.table("conversations").select("conversation_id").eq("user_id", user_id).execute()
-        deleted_counts["conversations"] = len(convs_result.data or [])
-        
-        if deleted_counts["conversations"] > 0:
-            supabase.table("conversations").delete().eq("user_id", user_id).execute()
-        
-        # 5. Delete files from Supabase Storage
-        try:
-            storage_files = supabase.storage.from_(settings.STORAGE_BUCKET).list()
-            if storage_files:
-                user_files = [f for f in storage_files if user_id in f.get("name", "")]
-                for file in user_files:
-                    try:
-                        supabase.storage.from_(settings.STORAGE_BUCKET).remove([file["name"]])
-                    except Exception as e:
-                        logger.warning(f"Error deleting storage file {file['name']}: {str(e)}")
-        except Exception as e:
-            logger.warning(f"Error accessing storage: {str(e)}")
-        
+                logger.warning(f"Error clearing storage: {e}")
+
         logger.info(f"Reset completed for user {user_id}: {deleted_counts}")
-        
-        return {
-            "message": "All data reset successfully",
-            "deleted": deleted_counts
-        }
-        
+        return {"message": "All data reset successfully", "deleted": deleted_counts}
+
     except Exception as e:
-        logger.error(f"Error during reset: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error resetting data"
-        )
+        logger.error(f"Error during reset: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error resetting data")
+
