@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import { GrokLogo } from "./GrokLogo";
 import { Button } from "./button";
-import { supabase } from "@/lib/supabase";
 
 interface ChatSidebarProps {
     currentConversationId: string | null;
@@ -34,8 +33,7 @@ export function ChatSidebar({
     const pathname = usePathname();
 
     const handleSignOut = async () => {
-        await supabase.auth.signOut();
-        router.push("/login");
+        router.push("/chat");
     };
 
     const menuItems = [

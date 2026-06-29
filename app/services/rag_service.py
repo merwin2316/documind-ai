@@ -4,7 +4,6 @@ Orchestrates multiple agents: Intent, Answer, and Transform.
 """
 from typing import List, Dict, Optional
 from app.services.vector_store import VectorStore
-from app.database.supabase_client import get_supabase_client
 from app.agents.intent_agent import IntentAgent
 from app.agents.answer_agent import AnswerAgent
 from app.agents.transform_agent import TransformAgent
@@ -785,15 +784,21 @@ Use paragraphs for explanations and bullets for lists as appropriate."""
         if not document_ids:
             return {}
         
-        supabase = await get_supabase_client()
-        
         # Get unique document IDs
         unique_ids = list(set(document_ids))
         
-        # Query database
-        result = supabase.table("documents").select("document_id, name").in_("document_id", unique_ids).execute()
+        # Query local database
+        import sqlite3
+        conn = sqlite3.connect("./documind.db")
+        conn.row_factory = sqlite3.Row
+        placeholders = ",".join("?" for _ in unique_ids)
+        rows = conn.execute(
+            f"SELECT document_id, name FROM documents WHERE document_id IN ({placeholders})",
+            unique_ids
+        ).fetchall()
+        conn.close()
         
-        return {doc["document_id"]: doc["name"] for doc in result.data}
+        return {row["document_id"]: row["name"] for row in rows}
     
     async def _classify_intent(self, question: str) -> str:
         """
@@ -859,18 +864,9 @@ Use paragraphs for explanations and bullets for lists as appropriate."""
     
     async def _get_user_documents(self, user_id: str) -> List[Dict]:
         """Get user's document list from database."""
-        from app.database.supabase_client import is_local_mode
-
-        if is_local_mode():
-            from app.database.supabase_client import get_local_db
-            docs, _ = get_local_db().list_documents(user_id, 0, 9999)
-            return docs
-        else:
-            supabase = await get_supabase_client()
-            result = supabase.table("documents").select(
-                "document_id, name, file_size, status, uploaded_at"
-            ).eq("user_id", user_id).order("uploaded_at", desc=True).execute()
-            return result.data if result.data else []
+        from app.database.supabase_client import get_local_db
+        docs, _ = get_local_db().list_documents(user_id, 0, 9999)
+        return docs
     
     async def _answer_about_document_vault(
         self,
@@ -957,118 +953,8 @@ Answer the question about the user's documents naturally and helpfully. Use para
         the specific keyword match, solving issues where lists or sentences are cut off.
         
         Since we don't have a chunk_index column, we use start_char ordering.
+        
+        In local mode, skip neighbor expansion (chunks stored in Qdrant only).
         """
-        if not retrieved_chunks:
-            return []
-
-        from app.database.supabase_client import is_local_mode
-
-        # In local mode, skip neighbor expansion (chunks stored in Qdrant only)
-        if is_local_mode():
-            return retrieved_chunks
-
-        supabase = await get_supabase_client()
-        expanded_chunks = []
-        processed_ids = set()
-
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        for chunk in retrieved_chunks:
-            # 1. Add the original chunk
-            if chunk["chunk_id"] not in processed_ids:
-                expanded_chunks.append(chunk)
-                processed_ids.add(chunk["chunk_id"])
-            
-            # Handle both flat structure (from vector_store.search) and nested payload structure
-            document_id = chunk.get("document_id") or chunk.get("payload", {}).get("document_id")
-            current_start = chunk.get("start_char") or chunk.get("payload", {}).get("start_char")
-            
-            # Skip neighbor fetching if missing critical metadata
-            if not document_id or current_start is None:
-                continue
-
-            # 2. Fetch NEXT chunk
-            try:
-                # Query: next chunk in same document (start_char > current)
-                response = supabase.table("document_chunks") \
-                    .select("*") \
-                    .eq("document_id", document_id) \
-                    .gt("start_char", current_start) \
-                    .order("start_char", desc=False) \
-                    .limit(1) \
-                    .execute()
-                
-                if response.data:
-                    next_chunk = response.data[0]
-                    next_id = next_chunk["chunk_id"]
-                    
-                    if next_id not in processed_ids:
-                        # Flatten structure to match retrieved chunks
-                        formatted_next = {
-                            "chunk_id": next_id,
-                            "document_id": next_chunk["document_id"],
-                            "user_id": next_chunk["user_id"],
-                            "page": next_chunk["page"],
-                            "start_char": next_chunk["start_char"],
-                            "end_char": next_chunk["end_char"],
-                            "text": next_chunk["text"],
-                            "score": chunk.get("score", 0) * 0.95  # Slightly lower score for neighbors
-                        }
-                        expanded_chunks.append(formatted_next)
-                        processed_ids.add(next_id)
-                        
-            except Exception as e:
-                logger.warning(f"Error fetching next chunk for {chunk['chunk_id']}: {e}")
-            
-            # 3. Fetch PREVIOUS chunk
-            try:
-                # Query: prev chunk in same document (start_char < current)
-                response = supabase.table("document_chunks") \
-                    .select("*") \
-                    .eq("document_id", document_id) \
-                    .lt("start_char", current_start) \
-                    .order("start_char", desc=True) \
-                    .limit(1) \
-                    .execute()
-                
-                if response.data:
-                    prev_chunk = response.data[0]
-                    prev_id = prev_chunk["chunk_id"]
-                    
-                    if prev_id not in processed_ids:
-                        # Flatten structure to match retrieved chunks
-                        formatted_prev = {
-                            "chunk_id": prev_id,
-                            "document_id": prev_chunk["document_id"],
-                            "user_id": prev_chunk["user_id"],
-                            "page": prev_chunk["page"],
-                            "start_char": prev_chunk["start_char"],
-                            "end_char": prev_chunk["end_char"],
-                            "text": prev_chunk["text"],
-                            "score": chunk.get("score", 0) * 0.95  # Slightly lower score for neighbors
-                        }
-                        # Insert previous chunk BEFORE the current chunk if possible, but appending is fine
-                        # due to re-sorting later if needed. For now, just append.
-                        expanded_chunks.append(formatted_prev)
-                        processed_ids.add(prev_id)
-
-            except Exception as e:
-                logger.warning(f"Error fetching prev chunk for {chunk['chunk_id']}: {e}")
-        
-        # Sort expanded chunks by document and starting character to maintain reading order
-        # This ensures the LLM reads text in the correct flow
-        # Sort expanded chunks by document and starting character to maintain reading order
-        # All chunks are now normalized to flat structure
-        expanded_chunks.sort(key=lambda x: (
-            x.get("document_id"),
-            x.get("start_char")
-        ))
-        
-        chunks_count = len(retrieved_chunks)
-        expanded_count = len(expanded_chunks)
-        if expanded_count > chunks_count:
-            logger.info(f"Context expansion: {chunks_count} -> {expanded_count} chunks")
-            
-        return expanded_chunks
+        return retrieved_chunks
 

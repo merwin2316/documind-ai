@@ -10,14 +10,6 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # -----------------------------
-    # Optional: Supabase (NOT required)
-    # -----------------------------
-    SUPABASE_URL: Optional[str] = None
-    SUPABASE_KEY: Optional[str] = None
-    SUPABASE_SERVICE_KEY: Optional[str] = None
-    SUPABASE_JWT_SECRET: Optional[str] = None
-
-    # -----------------------------
     # Vector DB (Required for RAG)
     # -----------------------------
     QDRANT_URL: str = "http://localhost:6333"
@@ -33,7 +25,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: Optional[str] = None
 
     # -----------------------------
-    # Database (Optional for demo)
+    # Database (SQLite — no setup needed)
     # -----------------------------
     DATABASE_URL: str = "sqlite:///./documind.db"
 
@@ -65,11 +57,6 @@ class Settings(BaseSettings):
     # -----------------------------
     STORAGE_BUCKET: str = "documents"
     LOCAL_STORAGE_PATH: str = "./storage"
-
-    @property
-    def use_supabase(self) -> bool:
-        """Check if Supabase is configured."""
-        return bool(self.SUPABASE_URL and self.SUPABASE_KEY)
 
     class Config:
         env_file = ".env"

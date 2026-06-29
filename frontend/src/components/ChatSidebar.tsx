@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
 import { listConversations, deleteConversation, updateConversation, fetchWithAuth } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,8 +65,8 @@ export function ChatSidebar({
 
     const loadUserAndConversations = async () => {
         try {
-            const { data } = await supabase.auth.getUser();
-            setUser(data.user);
+            // Local mode: static user
+            setUser({ email: "dev@documind.local" });
 
             const convs = await listConversations(0, 50);
             // Transform backend format to frontend format
@@ -77,22 +76,14 @@ export function ChatSidebar({
                 created_at: conv.created_at
             })));
 
-            // Check if admin - backend doesn't have role endpoint, so assume not admin for now
-            try {
-                const userProfile = await fetchWithAuth("/auth/me");
-                setIsAdmin(userProfile.role === "admin");
-            } catch {
-                setIsAdmin(false);
-            }
+            setIsAdmin(false);
         } catch (e) {
             console.error("Failed to load sidebar data", e);
         }
     };
 
     const handleLogout = async () => {
-        await supabase.auth.signOut();
-        localStorage.removeItem("supabase_token");
-        router.push("/login");
+        router.push("/chat");
     };
 
     const handleDeleteConversation = async (conversationId: string, e: React.MouseEvent) => {

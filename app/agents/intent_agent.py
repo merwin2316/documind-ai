@@ -82,6 +82,17 @@ Return JSON:
 
         user_prompt = "\n".join(parts)
 
+        print("=" * 100)
+        print(system_prompt)
+        print("=" * 100)
+        print(user_prompt)
+        print("=" * 100)
+        
+        print("=" * 100)
+        print(system_prompt)    
+        print("=" * 100)
+        print(user_prompt)
+        print("=" * 100)
         response = await self.llm.generate(
             messages=[
                 {"role": "system", "content": system_prompt},

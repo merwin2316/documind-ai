@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
 import { listDocuments, uploadFileWithAuth, deleteDocument } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,19 +43,8 @@ export default function VaultPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        const checkSession = async () => {
-            const { data } = await supabase.auth.getSession();
-            if (!data.session) {
-                router.push("/login");
-            } else {
-                // Refresh token in local storage securely if needed, but for now we rely on what was set in Login/Callback
-                // Or we can just set it here again to be sure
-                localStorage.setItem("supabase_token", data.session.access_token);
-                loadDocuments();
-            }
-        };
-        checkSession();
-    }, [router]);
+        loadDocuments();
+    }, []);
 
     const loadDocuments = async () => {
         try {
@@ -210,9 +198,7 @@ export default function VaultPage() {
     };
 
     const handleLogout = async () => {
-        await supabase.auth.signOut();
-        localStorage.removeItem("supabase_token");
-        router.push("/login");
+        router.push("/chat");
     };
 
     const handleDelete = async (documentId: string, documentTitle: string) => {

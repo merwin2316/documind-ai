@@ -48,12 +48,24 @@ class OllamaProvider(BaseLLMProvider):
             payload["format"] = "json"
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=None) as client:
+                print("Calling Ollama...")
+                logger.warning("=" * 80)
+                logger.warning(f"URL: {self.base_url}/api/chat")
+                logger.warning(f"MODEL: {self.chat_model}")
+                logger.warning(f"JSON MODE: {json_mode}")
+                logger.warning(messages)
+                logger.warning("=" * 80)
+                import time
+                start = time.time()
                 resp = await client.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
                 )
                 resp.raise_for_status()
+                print(f"Ollama took {time.time()-start:.2f} sec")
+                print(f"Ollama took {time.time()-start:.2f} sec")
+                logger.warning("OLLAMA RETURNED SUCCESS")
                 data = resp.json()
                 return data["message"]["content"]
         except httpx.ConnectError:
@@ -85,10 +97,11 @@ class OllamaProvider(BaseLLMProvider):
                 "temperature": temperature,
                 "num_predict": max_tokens,
             },
-        }
+        }   
 
         try:
-            async with httpx.AsyncClient(timeout=180.0) as client:
+            async with httpx.AsyncClient(timeout=None) as client:
+                print("Calling Ollama...")
                 async with client.stream(
                     "POST",
                     f"{self.base_url}/api/chat",
@@ -119,6 +132,8 @@ class OllamaProvider(BaseLLMProvider):
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 for text in texts:
+                    logger.warning(f"Ollama URL: {self.base_url}/api/chat")
+                    logger.warning(f"Payload: {payload}")
                     resp = await client.post(
                         f"{self.base_url}/api/embed",
                         json={"model": self.embedding_model, "input": text},

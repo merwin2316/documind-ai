@@ -10,7 +10,6 @@ import {
     Calendar, Tag as TagIcon, FileCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { supabase } from "@/lib/supabase";
 import { AppSidebar } from "@/components/AppSidebar";
 
 interface Category {
@@ -59,7 +58,6 @@ export default function KnowledgeBasePage() {
     const [showFilters, setShowFilters] = useState(false);
 
     useEffect(() => {
-        checkAuth();
         loadCategories();
         loadTags();
         loadDocuments();
@@ -69,12 +67,6 @@ export default function KnowledgeBasePage() {
         loadDocuments();
     }, [selectedCategory, selectedTags, searchQuery]);
 
-    const checkAuth = async () => {
-        const { data } = await supabase.auth.getSession();
-        if (!data.session) {
-            router.push("/login");
-        }
-    };
 
     const loadCategories = async () => {
         try {

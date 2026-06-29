@@ -1,5 +1,6 @@
 """
 Chat streaming endpoints using Server-Sent Events (SSE).
+Local SQLite mode only.
 """
 import uuid
 import json
@@ -11,7 +12,7 @@ from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.chat import ChatMessageCreate
 from app.services.rag_service import RAGService
-from app.database.supabase_client import get_supabase_client
+from app.database.supabase_client import get_local_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,43 +32,32 @@ async def stream_chat_message(
     - `event: token\ndata: "The"`
     - `event: result\ndata: {"answer": "...", "citations": [...]}`
     """
-    supabase = await get_supabase_client()
-    
-    # Get or create conversation (same logic as chat.py)
     conversation_id = message_data.conversation_id
-    if not conversation_id:
-        conversation_id = str(uuid.uuid4())
-        title = message_data.message[:50]
-        supabase.table("conversations").insert({
-            "conversation_id": conversation_id,
-            "user_id": current_user.user_id,
-            "title": title
-        }).execute()
-    else:
-        # Verify conversation belongs to user
-        conv_result = supabase.table("conversations").select("conversation_id").eq("conversation_id", conversation_id).eq("user_id", current_user.user_id).execute()
-        if not conv_result.data:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        
-    # Get context (previous message)
     previous_message = None
     previous_topic = None
     previous_active_entity = None
-    
-    if conversation_id:
-        last_msg = supabase.table("messages").select("assistant_message").eq("conversation_id", conversation_id).order("created_at", desc=True).limit(1).execute()
-        if last_msg.data:
-            previous_message = last_msg.data[0].get("assistant_message")
-            
-        # Topic and active_entity columns missing in DB, relying on message extraction
-        previous_topic = None 
-        previous_active_entity = None
-            
+
+    db = get_local_db()
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        db.insert_conversation({
+            "conversation_id": conversation_id,
+            "user_id": current_user.user_id,
+            "title": message_data.message[:50],
+        })
+    else:
+        conv = db.get_conversation(conversation_id, current_user.user_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        msgs = db.get_messages(conversation_id)
+        if msgs:
+            previous_message = msgs[-1].get("assistant_message")
+
     rag_service = RAGService()
     
     async def event_generator():
         # First yield the conversation ID so frontend knows where we are
-        logger.info(f"Starting stream for conversation {conversation_id} - FIXED VERSION")
+        logger.info(f"Starting stream for conversation {conversation_id}")
         yield f"event: conversation_id\ndata: {conversation_id}\n\n"
         
         final_result = None
@@ -97,39 +87,33 @@ async def stream_chat_message(
             
             # Save to DB if we got a result
             if final_result:
-                # Save message
                 message_id = str(uuid.uuid4())
-                
-                supabase.table("messages").insert({
+                message_record = {
                     "message_id": message_id,
                     "conversation_id": conversation_id,
                     "user_message": message_data.message,
                     "assistant_message": final_result["answer"],
-                    "created_at": datetime.utcnow().isoformat()
-                }).execute()
-                
-                # Save citations
+                    "created_at": datetime.utcnow().isoformat(),
+                }
                 citations = final_result.get("citations", [])
-                if citations:
-                    citation_records = [
-                        {
-                            "message_id": message_id,
-                            "document_id": c["document_id"],
-                            "chunk_id": c.get("chunk_id"),
-                            "page": c["page"],
-                            "start_char": c["start_char"],
-                            "end_char": c["end_char"],
-                            "text_snippet": c.get("text_snippet")
-                        }
-                        for c in citations
-                    ]
-                    supabase.table("citations").insert(citation_records).execute()
-                
-                # Update conversation last updated time
-                # topic and active_entity column missing in schema, skipping update
-                update_data = {"updated_at": datetime.utcnow().isoformat()}
+                citation_records = [
+                    {
+                        "message_id": message_id,
+                        "document_id": c["document_id"],
+                        "chunk_id": c.get("chunk_id", f"chunk_{c.get('id', '')}"),
+                        "page": c["page"],
+                        "start_char": c["start_char"],
+                        "end_char": c["end_char"],
+                        "text_snippet": c.get("text_snippet"),
+                    }
+                    for c in citations
+                ]
 
-                supabase.table("conversations").update(update_data).eq("conversation_id", conversation_id).execute()
+                db = get_local_db()
+                db.insert_message(message_record)
+                for cit in citation_records:
+                    db.insert_citation(cit)
+                db.update_conversation(conversation_id, current_user.user_id, {})
                 
                 # Yield final result to client
                 final_payload = {
@@ -142,7 +126,7 @@ async def stream_chat_message(
                 yield f"event: result\ndata: {json.dumps(final_payload)}\n\n"
                 
         except Exception as e:
-            logger.error(f"Streaming error: {e}")
+            logger.error(f"Streaming error: {e}", exc_info=True)
             yield f"event: error\ndata: {json.dumps(str(e))}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

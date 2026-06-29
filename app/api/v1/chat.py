@@ -1,6 +1,6 @@
 """
 Chat and conversation endpoints.
-Supports both Supabase and local SQLite modes.
+Local SQLite mode only.
 """
 import uuid
 import re
@@ -18,7 +18,7 @@ from app.models.chat import (
     Message, Citation,
 )
 from app.services.rag_service import RAGService
-from app.database.supabase_client import get_supabase_client, is_local_mode, get_local_db
+from app.database.supabase_client import get_local_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -60,39 +60,21 @@ async def create_chat_message(
     previous_topic = None
     previous_active_entity = None
 
-    if is_local_mode():
-        db = get_local_db()
-        if not conversation_id:
-            conversation_id = str(uuid.uuid4())
-            db.insert_conversation({
-                "conversation_id": conversation_id,
-                "user_id": current_user.user_id,
-                "title": message_data.message[:50],
-            })
-        else:
-            conv = db.get_conversation(conversation_id, current_user.user_id)
-            if not conv:
-                raise HTTPException(status_code=404, detail="Conversation not found")
-            msgs = db.get_messages(conversation_id)
-            if msgs:
-                previous_message = msgs[-1].get("assistant_message")
+    db = get_local_db()
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        db.insert_conversation({
+            "conversation_id": conversation_id,
+            "user_id": current_user.user_id,
+            "title": message_data.message[:50],
+        })
     else:
-        supabase = await get_supabase_client()
-        if not conversation_id:
-            conversation_id = str(uuid.uuid4())
-            supabase.table("conversations").insert({
-                "conversation_id": conversation_id,
-                "user_id": current_user.user_id,
-                "title": message_data.message[:50],
-            }).execute()
-        else:
-            conv_result = supabase.table("conversations").select("*").eq("conversation_id", conversation_id).eq("user_id", current_user.user_id).execute()
-            if not conv_result.data:
-                raise HTTPException(status_code=404, detail="Conversation not found")
-        if conversation_id:
-            last_msg = supabase.table("messages").select("assistant_message").eq("conversation_id", conversation_id).order("created_at", desc=True).limit(1).execute()
-            if last_msg.data:
-                previous_message = last_msg.data[0].get("assistant_message")
+        conv = db.get_conversation(conversation_id, current_user.user_id)
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        msgs = db.get_messages(conversation_id)
+        if msgs:
+            previous_message = msgs[-1].get("assistant_message")
 
     # RAG processing
     rag_service = RAGService()
@@ -134,18 +116,10 @@ async def create_chat_message(
         for c in rag_result["citations"]
     ]
 
-    if is_local_mode():
-        db = get_local_db()
-        db.insert_message(message_record)
-        for cit in citation_records:
-            db.insert_citation(cit)
-        db.update_conversation(conversation_id, current_user.user_id, {})
-    else:
-        supabase = await get_supabase_client()
-        supabase.table("messages").insert(message_record).execute()
-        if citation_records:
-            supabase.table("citations").insert(citation_records).execute()
-        supabase.table("conversations").update({"updated_at": datetime.utcnow().isoformat()}).eq("conversation_id", conversation_id).execute()
+    db.insert_message(message_record)
+    for cit in citation_records:
+        db.insert_citation(cit)
+    db.update_conversation(conversation_id, current_user.user_id, {})
 
     citations = [Citation(**c) for c in rag_result["citations"]]
     return ChatMessageResponse(
@@ -166,53 +140,20 @@ async def list_conversations(
     current_user: User = Depends(get_current_user),
 ):
     """List all conversations for the current user."""
-    if is_local_mode():
-        db = get_local_db()
-        convs_data, total = db.list_conversations(current_user.user_id, skip, limit)
-        conversations = []
-        for c in convs_data:
-            msgs = db.get_messages(c["conversation_id"])
-            conversations.append(Conversation(
-                conversation_id=c["conversation_id"],
-                user_id=c["user_id"],
-                title=c.get("title"),
-                is_pinned=bool(c.get("is_pinned", False)),
-                created_at=parse_datetime(c.get("created_at")) or datetime.now(),
-                updated_at=parse_datetime(c.get("updated_at")) or datetime.now(),
-                message_count=len(msgs),
-            ))
-        return ConversationListResponse(conversations=conversations, total=total)
-
-    # Supabase mode
-    supabase = await get_supabase_client()
-    result = supabase.table("conversations").select("*").eq("user_id", current_user.user_id).order("updated_at", desc=True).range(skip, skip + limit - 1).execute()
-
-    conversation_ids = [c["conversation_id"] for c in result.data]
-    message_counts = {}
-    if conversation_ids:
-        try:
-            all_msgs = supabase.table("messages").select("conversation_id").in_("conversation_id", conversation_ids).execute()
-            for m in (all_msgs.data or []):
-                cid = m.get("conversation_id")
-                if cid:
-                    message_counts[cid] = message_counts.get(cid, 0) + 1
-        except Exception:
-            message_counts = {cid: 0 for cid in conversation_ids}
-
+    db = get_local_db()
+    convs_data, total = db.list_conversations(current_user.user_id, skip, limit)
     conversations = []
-    for c in result.data:
+    for c in convs_data:
+        msgs = db.get_messages(c["conversation_id"])
         conversations.append(Conversation(
             conversation_id=c["conversation_id"],
             user_id=c["user_id"],
             title=c.get("title"),
-            is_pinned=c.get("is_pinned", False),
+            is_pinned=bool(c.get("is_pinned", False)),
             created_at=parse_datetime(c.get("created_at")) or datetime.now(),
             updated_at=parse_datetime(c.get("updated_at")) or datetime.now(),
-            message_count=message_counts.get(c["conversation_id"], 0),
+            message_count=len(msgs),
         ))
-
-    count_result = supabase.table("conversations").select("*", count="exact").eq("user_id", current_user.user_id).execute()
-    total = count_result.count if hasattr(count_result, "count") else 0
     return ConversationListResponse(conversations=conversations, total=total)
 
 
@@ -225,83 +166,21 @@ async def get_conversation(
     current_user: User = Depends(get_current_user),
 ):
     """Get a specific conversation with all messages and citations."""
-    if is_local_mode():
-        db = get_local_db()
-        conv = db.get_conversation(conversation_id, current_user.user_id)
-        if not conv:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-
-        msgs_data = db.get_messages(conversation_id)
-        messages = []
-        for m in msgs_data:
-            cits_data = db.get_citations(m["message_id"])
-            citations = [
-                Citation(
-                    id=i + 1,
-                    document_id=c["document_id"],
-                    document_name=c.get("document_name", "Document"),
-                    file_name=c.get("document_name", "Document"),
-                    page=c["page"],
-                    page_number=c["page"],
-                    start_char=c["start_char"],
-                    end_char=c["end_char"],
-                    quote=c.get("text_snippet"),
-                    text_snippet=c.get("text_snippet"),
-                )
-                for i, c in enumerate(cits_data)
-            ]
-            messages.append(Message(
-                message_id=m["message_id"],
-                conversation_id=m["conversation_id"],
-                user_message=m["user_message"],
-                assistant_message=m["assistant_message"],
-                citations=citations,
-                created_at=parse_datetime(m.get("created_at")) or datetime.now(),
-            ))
-
-        conversation = Conversation(
-            conversation_id=conv["conversation_id"],
-            user_id=conv["user_id"],
-            title=conv.get("title"),
-            is_pinned=bool(conv.get("is_pinned", False)),
-            created_at=parse_datetime(conv.get("created_at")) or datetime.now(),
-            updated_at=parse_datetime(conv.get("updated_at")) or datetime.now(),
-            message_count=len(messages),
-        )
-        return ConversationDetailResponse(conversation=conversation, messages=messages)
-
-    # Supabase mode
-    supabase = await get_supabase_client()
-    conv_result = supabase.table("conversations").select("*").eq("conversation_id", conversation_id).eq("user_id", current_user.user_id).execute()
-    if not conv_result.data:
+    db = get_local_db()
+    conv = db.get_conversation(conversation_id, current_user.user_id)
+    if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    conv_data = conv_result.data[0]
-    messages_result = supabase.table("messages").select("*").eq("conversation_id", conversation_id).order("created_at", desc=False).execute()
-
-    message_ids = [m["message_id"] for m in messages_result.data]
-    citations_by_message = {}
-    document_names = {}
-
-    if message_ids:
-        all_cits = supabase.table("citations").select("*").in_("message_id", message_ids).execute()
-        for c in (all_cits.data or []):
-            mid = c["message_id"]
-            citations_by_message.setdefault(mid, []).append(c)
-        doc_ids = list({c["document_id"] for c in (all_cits.data or [])})
-        if doc_ids:
-            docs = supabase.table("documents").select("document_id, name").in_("document_id", doc_ids).execute()
-            document_names = {d["document_id"]: d["name"] for d in docs.data}
-
+    msgs_data = db.get_messages(conversation_id)
     messages = []
-    for m in messages_result.data:
-        msg_cits = citations_by_message.get(m["message_id"], [])
+    for m in msgs_data:
+        cits_data = db.get_citations(m["message_id"])
         citations = [
             Citation(
                 id=i + 1,
                 document_id=c["document_id"],
-                document_name=document_names.get(c["document_id"], "Unknown"),
-                file_name=document_names.get(c["document_id"], "Unknown"),
+                document_name=c.get("document_name", "Document"),
+                file_name=c.get("document_name", "Document"),
                 page=c["page"],
                 page_number=c["page"],
                 start_char=c["start_char"],
@@ -309,7 +188,7 @@ async def get_conversation(
                 quote=c.get("text_snippet"),
                 text_snippet=c.get("text_snippet"),
             )
-            for i, c in enumerate(msg_cits)
+            for i, c in enumerate(cits_data)
         ]
         messages.append(Message(
             message_id=m["message_id"],
@@ -320,16 +199,14 @@ async def get_conversation(
             created_at=parse_datetime(m.get("created_at")) or datetime.now(),
         ))
 
-    msg_count = supabase.table("messages").select("*", count="exact").eq("conversation_id", conversation_id).execute()
-
     conversation = Conversation(
-        conversation_id=conv_data["conversation_id"],
-        user_id=conv_data["user_id"],
-        title=conv_data.get("title"),
-        is_pinned=conv_data.get("is_pinned", False),
-        created_at=parse_datetime(conv_data.get("created_at")) or datetime.now(),
-        updated_at=parse_datetime(conv_data.get("updated_at")) or datetime.now(),
-        message_count=msg_count.count if hasattr(msg_count, "count") else 0,
+        conversation_id=conv["conversation_id"],
+        user_id=conv["user_id"],
+        title=conv.get("title"),
+        is_pinned=bool(conv.get("is_pinned", False)),
+        created_at=parse_datetime(conv.get("created_at")) or datetime.now(),
+        updated_at=parse_datetime(conv.get("updated_at")) or datetime.now(),
+        message_count=len(messages),
     )
     return ConversationDetailResponse(conversation=conversation, messages=messages)
 
@@ -343,19 +220,11 @@ async def delete_conversation(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a conversation and all its messages."""
-    if is_local_mode():
-        db = get_local_db()
-        conv = db.get_conversation(conversation_id, current_user.user_id)
-        if not conv:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        db.delete_conversation(conversation_id, current_user.user_id)
-        return
-
-    supabase = await get_supabase_client()
-    conv_result = supabase.table("conversations").select("*").eq("conversation_id", conversation_id).eq("user_id", current_user.user_id).execute()
-    if not conv_result.data:
+    db = get_local_db()
+    conv = db.get_conversation(conversation_id, current_user.user_id)
+    if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    supabase.table("conversations").delete().eq("conversation_id", conversation_id).eq("user_id", current_user.user_id).execute()
+    db.delete_conversation(conversation_id, current_user.user_id)
 
 
 # ================================================================
@@ -374,42 +243,19 @@ async def update_conversation(
     if update_data.is_pinned is not None:
         update_dict["is_pinned"] = update_data.is_pinned
 
-    if is_local_mode():
-        db = get_local_db()
-        conv = db.get_conversation(conversation_id, current_user.user_id)
-        if not conv:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        db.update_conversation(conversation_id, current_user.user_id, update_dict)
-        updated = db.get_conversation(conversation_id, current_user.user_id)
-        msgs = db.get_messages(conversation_id)
-        return Conversation(
-            conversation_id=updated["conversation_id"],
-            user_id=updated["user_id"],
-            title=updated.get("title"),
-            is_pinned=bool(updated.get("is_pinned", False)),
-            created_at=parse_datetime(updated.get("created_at")) or datetime.now(),
-            updated_at=parse_datetime(updated.get("updated_at")) or datetime.now(),
-            message_count=len(msgs),
-        )
-
-    supabase = await get_supabase_client()
-    conv_result = supabase.table("conversations").select("*").eq("conversation_id", conversation_id).eq("user_id", current_user.user_id).execute()
-    if not conv_result.data:
+    db = get_local_db()
+    conv = db.get_conversation(conversation_id, current_user.user_id)
+    if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
-    update_dict["updated_at"] = datetime.utcnow().isoformat()
-    result = supabase.table("conversations").update(update_dict).eq("conversation_id", conversation_id).eq("user_id", current_user.user_id).execute()
-    if not result.data:
-        raise HTTPException(status_code=500, detail="Failed to update conversation")
-
-    u = result.data[0]
-    msg_count = supabase.table("messages").select("*", count="exact").eq("conversation_id", conversation_id).execute()
+    db.update_conversation(conversation_id, current_user.user_id, update_dict)
+    updated = db.get_conversation(conversation_id, current_user.user_id)
+    msgs = db.get_messages(conversation_id)
     return Conversation(
-        conversation_id=u["conversation_id"],
-        user_id=u["user_id"],
-        title=u.get("title"),
-        is_pinned=u.get("is_pinned", False),
-        created_at=parse_datetime(u.get("created_at")) or datetime.now(),
-        updated_at=parse_datetime(u.get("updated_at")) or datetime.now(),
-        message_count=msg_count.count if hasattr(msg_count, "count") else 0,
+        conversation_id=updated["conversation_id"],
+        user_id=updated["user_id"],
+        title=updated.get("title"),
+        is_pinned=bool(updated.get("is_pinned", False)),
+        created_at=parse_datetime(updated.get("created_at")) or datetime.now(),
+        updated_at=parse_datetime(updated.get("updated_at")) or datetime.now(),
+        message_count=len(msgs),
     )

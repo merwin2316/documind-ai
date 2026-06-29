@@ -440,14 +440,10 @@ class DocumentProcessor:
         return chunks
     
     async def _store_chunks_metadata(self, chunks: List[Dict]):
-        """Store chunk metadata in PostgreSQL."""
-        from app.database.supabase_client import get_supabase_client
-        
+        """Store chunk metadata in local SQLite database."""
         if not chunks:
             return
-        
-        supabase = await get_supabase_client()
-        
+
         # Prepare chunks for insertion
         chunk_records = [
             {
@@ -461,10 +457,7 @@ class DocumentProcessor:
             }
             for chunk in chunks
         ]
-        
-        # Insert in batches
-        batch_size = 100
-        for i in range(0, len(chunk_records), batch_size):
-            batch = chunk_records[i:i + batch_size]
-            supabase.table("document_chunks").insert(batch).execute()
+
+        from app.database.supabase_client import get_local_db
+        get_local_db().insert_chunks(chunk_records)
 

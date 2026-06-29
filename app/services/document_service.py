@@ -1,6 +1,6 @@
 """
 Document service for managing documents.
-Supports both Supabase (cloud) and local (SQLite + filesystem) modes.
+Local SQLite + filesystem mode only.
 """
 import os
 import uuid
@@ -43,12 +43,7 @@ class DocumentService:
 
         file_content = await file.read()
 
-        from app.database.supabase_client import is_local_mode
-
-        if is_local_mode():
-            await self._upload_local(document_id, storage_path, file_content, filename, file_size, content_type)
-        else:
-            await self._upload_supabase(document_id, storage_path, file_content, filename, file_size, content_type)
+        await self._upload_local(document_id, storage_path, file_content, filename, file_size, content_type)
 
         # Process document (extract text, chunk, embed)
         await self._process_document(document_id, file_content, filename)
@@ -56,19 +51,6 @@ class DocumentService:
         # Get final status
         final_status = await self._get_status(document_id)
         return {"document_id": document_id, "name": filename, "status": final_status}
-
-    async def _upload_supabase(self, doc_id, storage_path, content, filename, size, content_type):
-        from app.database.supabase_client import get_supabase_client
-        supabase = await get_supabase_client()
-        supabase.storage.from_(settings.STORAGE_BUCKET).upload(
-            storage_path, content,
-            file_options={"content-type": content_type, "upsert": "false"},
-        )
-        supabase.table("documents").insert({
-            "document_id": doc_id, "user_id": self.user_id, "name": filename,
-            "storage_path": storage_path, "file_size": size,
-            "file_type": content_type, "status": "processing",
-        }).execute()
 
     async def _upload_local(self, doc_id, storage_path, content, filename, size, content_type):
         from app.database.supabase_client import get_local_db
@@ -85,23 +67,15 @@ class DocumentService:
         })
 
     async def _get_status(self, document_id: str) -> str:
-        from app.database.supabase_client import is_local_mode
-        if is_local_mode():
-            from app.database.supabase_client import get_local_db
-            doc = get_local_db().get_document(document_id, self.user_id)
-            return doc["status"] if doc else "processing"
-        else:
-            from app.database.supabase_client import get_supabase_client
-            supabase = await get_supabase_client()
-            result = supabase.table("documents").select("status").eq("document_id", document_id).execute()
-            return result.data[0]["status"] if result.data else "processing"
+        from app.database.supabase_client import get_local_db
+        doc = get_local_db().get_document(document_id, self.user_id)
+        return doc["status"] if doc else "processing"
 
     # ================================================================
     # Process Document
     # ================================================================
     async def _process_document(self, document_id: str, file_content: bytes, filename: str):
         """Extract text, chunk, embed, categorize."""
-        from app.database.supabase_client import is_local_mode
         try:
             processor = DocumentProcessor()
             chunks = await processor.process_document(file_content, filename, document_id, self.user_id)
@@ -131,13 +105,8 @@ class DocumentService:
                 "related_document_ids": related_ids,
             }
 
-            if is_local_mode():
-                from app.database.supabase_client import get_local_db
-                get_local_db().update_document(document_id, update_data)
-            else:
-                from app.database.supabase_client import get_supabase_client
-                supabase = await get_supabase_client()
-                supabase.table("documents").update(update_data).eq("document_id", document_id).execute()
+            from app.database.supabase_client import get_local_db
+            get_local_db().update_document(document_id, update_data)
 
             await get_connection_manager().broadcast_to_user(self.user_id, {
                 "document_id": document_id, "status": "ready",
@@ -149,13 +118,8 @@ class DocumentService:
             error_msg = str(e) if isinstance(e, ValueError) else f"Processing failed: {e}"
             logger.error(f"Error processing document {document_id}: {error_msg}", exc_info=True)
 
-            if is_local_mode():
-                from app.database.supabase_client import get_local_db
-                get_local_db().update_document(document_id, {"status": "error", "error_message": error_msg})
-            else:
-                from app.database.supabase_client import get_supabase_client
-                supabase = await get_supabase_client()
-                supabase.table("documents").update({"status": "error", "error_message": error_msg}).eq("document_id", document_id).execute()
+            from app.database.supabase_client import get_local_db
+            get_local_db().update_document(document_id, {"status": "error", "error_message": error_msg})
 
             await get_connection_manager().broadcast_to_user(self.user_id, {
                 "document_id": document_id, "status": "error", "error_message": error_msg,
@@ -182,44 +146,15 @@ class DocumentService:
     # CRUD
     # ================================================================
     async def list_documents(self, skip: int = 0, limit: int = 20) -> tuple:
-        from app.database.supabase_client import is_local_mode
-        if is_local_mode():
-            from app.database.supabase_client import get_local_db
-            docs_data, total = get_local_db().list_documents(self.user_id, skip, limit)
-            documents = [Document(**d) for d in docs_data]
-            return documents, total
-        else:
-            import asyncio
-            from app.database.supabase_client import get_supabase_client
-            supabase = await get_supabase_client()
-            loop = asyncio.get_event_loop()
-            count_result = await loop.run_in_executor(
-                None,
-                lambda: supabase.table("documents").select("*", count="exact").eq("user_id", self.user_id).execute(),
-            )
-            total = count_result.count if hasattr(count_result, "count") else 0
-            result = await loop.run_in_executor(
-                None,
-                lambda: supabase.table("documents").select("*").eq("user_id", self.user_id).order("uploaded_at", desc=True).range(skip, skip + limit - 1).execute(),
-            )
-            return [Document(**d) for d in result.data], total
+        from app.database.supabase_client import get_local_db
+        docs_data, total = get_local_db().list_documents(self.user_id, skip, limit)
+        documents = [Document(**d) for d in docs_data]
+        return documents, total
 
     async def get_document(self, document_id: str) -> Optional[Document]:
-        from app.database.supabase_client import is_local_mode
-        if is_local_mode():
-            from app.database.supabase_client import get_local_db
-            d = get_local_db().get_document(document_id, self.user_id)
-            return Document(**d) if d else None
-        else:
-            import asyncio
-            from app.database.supabase_client import get_supabase_client
-            supabase = await get_supabase_client()
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: supabase.table("documents").select("*").eq("document_id", document_id).eq("user_id", self.user_id).execute(),
-            )
-            return Document(**result.data[0]) if result.data else None
+        from app.database.supabase_client import get_local_db
+        d = get_local_db().get_document(document_id, self.user_id)
+        return Document(**d) if d else None
 
     async def delete_document(self, document_id: str) -> bool:
         document = await self.get_document(document_id)
@@ -232,30 +167,12 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Error deleting from Qdrant: {e}")
 
-        from app.database.supabase_client import is_local_mode
-        if is_local_mode():
-            from app.database.supabase_client import get_local_db
-            # Delete local file
-            full_path = os.path.join(settings.LOCAL_STORAGE_PATH, document.storage_path)
-            if os.path.exists(full_path):
-                os.remove(full_path)
-            get_local_db().delete_document(document_id, self.user_id)
-        else:
-            from app.database.supabase_client import get_supabase_client
-            supabase = await get_supabase_client()
-            try:
-                supabase.table("document_chunks").delete().eq("document_id", document_id).execute()
-            except Exception:
-                pass
-            try:
-                supabase.storage.from_(settings.STORAGE_BUCKET).remove([document.storage_path])
-            except Exception:
-                pass
-            try:
-                supabase.table("citations").delete().eq("document_id", document_id).execute()
-            except Exception:
-                pass
-            supabase.table("documents").delete().eq("document_id", document_id).eq("user_id", self.user_id).execute()
+        from app.database.supabase_client import get_local_db
+        # Delete local file
+        full_path = os.path.join(settings.LOCAL_STORAGE_PATH, document.storage_path)
+        if os.path.exists(full_path):
+            os.remove(full_path)
+        get_local_db().delete_document(document_id, self.user_id)
 
         logger.info(f"Deleted document {document_id}")
         return True
@@ -265,20 +182,5 @@ class DocumentService:
         if not document:
             raise ValueError("Document not found")
 
-        from app.database.supabase_client import is_local_mode
-        if is_local_mode():
-            # Return local file path (frontend can use /api/v1/documents/{id}/download)
-            return f"/api/v1/documents/{document_id}/download"
-        else:
-            import asyncio
-            from app.database.supabase_client import get_supabase_client
-            supabase = await get_supabase_client()
-            loop = asyncio.get_event_loop()
-            url_response = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: supabase.storage.from_(settings.STORAGE_BUCKET).create_signed_url(document.storage_path, expires_in),
-                ),
-                timeout=10.0,
-            )
-            return url_response["signedURL"]
+        # Return local file path (frontend can use /api/v1/documents/{id}/download)
+        return f"/api/v1/documents/{document_id}/download"

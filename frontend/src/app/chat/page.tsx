@@ -2,10 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
 import { fetchWithAuth, getDocumentUrl, getDocumentDownloadUrl, API_URL, sendChatMessage, sendChatMessageStream, getConversation, listConversations, uploadFileWithAuth } from "@/lib/api";
-import { ChatSidebar } from "@/components/ui/GrokSidebar"; // This will be removed in next step (actually I should just replace it now)
-// Wait, I should replace the imports directly.
+import { ChatSidebar } from "@/components/ui/GrokSidebar";
 
 import { AppSidebar } from "@/components/AppSidebar";
 import { DashboardHome } from "@/components/DashboardHome";
@@ -81,17 +79,7 @@ export default function ChatPage() {
     const [pdfViewerCitation, setPdfViewerCitation] = useState<any>(null);
     const [pdfViewerAllCitations, setPdfViewerAllCitations] = useState<any[]>([]);
 
-    useEffect(() => {
-        const checkSession = async () => {
-            const { data } = await supabase.auth.getSession();
-            if (!data.session) {
-                router.push("/login");
-            } else {
-                localStorage.setItem("supabase_token", data.session.access_token);
-            }
-        };
-        checkSession();
-    }, [router]);
+    // No auth check needed — local mode
 
     // Load conversation when conversationId changes (e.g., from sidebar selection or on mount)
     // But don't reload if we're actively in a conversation (loading or streaming)
@@ -468,7 +456,7 @@ export default function ChatPage() {
         try {
             // Get document download URL from backend
             const response = await getDocumentDownloadUrl(citation.document_id);
-            const documentUrl = response.url || response;
+            const documentUrl = (response as any).url || response;
 
             if (!documentUrl) {
                 throw new Error("No document URL returned from server");

@@ -68,11 +68,8 @@ export function useDocumentStatus(options: UseDocumentStatusOptions = {}) {
                 setConnectionStatus('connected');
                 setUsePolling(false);
 
-                // Send authentication token if needed
-                const token = localStorage.getItem('supabase_token');
-                if (token) {
-                    ws.send(JSON.stringify({ type: 'auth', token }));
-                }
+                // Send authentication message (local mode - static token)
+                ws.send(JSON.stringify({ type: 'auth', token: 'local' }));
             };
 
             ws.onmessage = (event) => {

@@ -24,7 +24,6 @@ async def upload_document(
     **Frontend Endpoint**: `POST /api/v1/documents/upload`
     
     **Headers**: 
-    - `Authorization: Bearer <jwt_token>`
     - `Content-Type: multipart/form-data`
     
     **Request Body**:
@@ -92,9 +91,6 @@ async def list_documents(
     
     **Frontend Endpoint**: `GET /api/v1/documents?skip=0&limit=20`
     
-    **Headers**: 
-    - `Authorization: Bearer <jwt_token>`
-    
     **Query Parameters**:
     - `skip`: Number of documents to skip (default: 0)
     - `limit`: Maximum number of documents to return (default: 20)
@@ -134,9 +130,6 @@ async def get_document(
     
     **Frontend Endpoint**: `GET /api/v1/documents/{document_id}`
     
-    **Headers**: 
-    - `Authorization: Bearer <jwt_token>`
-    
     **Response**:
     ```json
     {
@@ -171,9 +164,6 @@ async def delete_document(
     
     **Frontend Endpoint**: `DELETE /api/v1/documents/{document_id}`
     
-    **Headers**: 
-    - `Authorization: Bearer <jwt_token>`
-    
     **Response**: 204 No Content
     """
     document_service = DocumentService(current_user.user_id)
@@ -195,9 +185,6 @@ async def get_document_download_url(
     Get a signed URL for downloading/viewing the PDF document.
     
     **Frontend Endpoint**: `GET /api/v1/documents/{document_id}/download-url`
-    
-    **Headers**: 
-    - `Authorization: Bearer <jwt_token>`
     
     **Response**:
     ```json
@@ -242,6 +229,42 @@ async def get_document_download_url(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting download URL: {str(e)}"
         )
+
+
+@router.get("/{document_id}/download")
+async def download_document(
+    document_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Download/stream the actual document file from local storage.
+    """
+    import os
+    from fastapi.responses import FileResponse
+    from config import settings
+    
+    document_service = DocumentService(current_user.user_id)
+    document = await document_service.get_document(document_id)
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found"
+        )
+        
+    full_path = os.path.join(settings.LOCAL_STORAGE_PATH, document.storage_path)
+    if not os.path.exists(full_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document file not found on disk"
+        )
+        
+    return FileResponse(
+        path=full_path,
+        media_type="application/pdf" if document.name.lower().endswith(".pdf") else "application/octet-stream",
+        filename=document.name
+    )
+
 
 
 

@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
-import { fetchWithAuth } from "@/lib/api";
+import { fetchWithAuth, getDocumentDownloadUrl } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Download, FileText, Loader2 } from "lucide-react";
@@ -19,19 +18,8 @@ export default function DocumentViewerPage() {
     const [downloading, setDownloading] = useState(false);
 
     useEffect(() => {
-        const checkSessionAndLoad = async () => {
-            const { data } = await supabase.auth.getSession();
-            if (!data.session) {
-                router.push("/login");
-                return;
-            }
-
-            localStorage.setItem("supabase_token", data.session.access_token);
-            await loadDocument();
-        };
-
-        checkSessionAndLoad();
-    }, [documentId, router]);
+        loadDocument();
+    }, [documentId]);
 
     const loadDocument = async () => {
         try {
@@ -62,23 +50,10 @@ export default function DocumentViewerPage() {
 
         try {
             setDownloading(true);
-            const token = localStorage.getItem("supabase_token");
-            
-            // Get download URL from Supabase Storage
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) {
-                throw new Error("Not authenticated");
-            }
-
-            const { data, error } = await supabase.storage
-                .from("documents")
-                .createSignedUrl(document.storage_path, 3600); // 1 hour expiry
-
-            if (error) throw error;
-
-            if (data?.signedUrl) {
-                // Open download in new tab
-                window.open(data.signedUrl, '_blank');
+            // Use the backend download-url endpoint
+            const url = await getDocumentDownloadUrl(documentId);
+            if (url) {
+                window.open(url, '_blank');
             }
         } catch (e: any) {
             console.error("Download error:", e);
@@ -228,4 +203,3 @@ export default function DocumentViewerPage() {
         </div>
     );
 }
-

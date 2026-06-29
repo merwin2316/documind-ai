@@ -13,7 +13,6 @@ import {
     Clock,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { supabase } from "@/lib/supabase";
 import { listConversations } from "@/lib/api";
 import { motion } from "framer-motion";
 
@@ -64,8 +63,7 @@ export function AppSidebar({
     };
 
     const handleSignOut = async () => {
-        await supabase.auth.signOut();
-        router.push("/login");
+        router.push("/chat");
     };
 
     const groupConversations = () => {

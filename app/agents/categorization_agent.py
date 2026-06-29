@@ -89,21 +89,18 @@ Analyze this document and provide categorization metadata in JSON format."""
         """Find related documents using vector similarity."""
         try:
             from app.services.vector_store import VectorStore
-            from app.database.supabase_client import get_supabase_client
+            from app.database.supabase_client import get_local_db
 
-            supabase = await get_supabase_client()
-            chunks_result = (
-                supabase.table("document_chunks")
-                .select("chunk_id")
-                .eq("document_id", document_id)
-                .limit(3)
-                .execute()
-            )
+            first_chunk_id = None
 
-            if not chunks_result.data:
+            db = get_local_db()
+            chunks = db.get_chunks(document_id)
+            if chunks:
+                first_chunk_id = chunks[0]["chunk_id"]
+
+            if not first_chunk_id:
                 return []
 
-            first_chunk_id = chunks_result.data[0]["chunk_id"]
             vector_store = VectorStore()
             similar_chunks = await vector_store.search(
                 query="",
