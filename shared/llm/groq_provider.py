@@ -70,10 +70,14 @@ class GroqProvider(BaseLLMProvider):
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
         except httpx.HTTPStatusError as e:
-            logger.error(f"Groq API error: {e.response.status_code} — {e.response.text[:500]}")
+            logger.error(
+                "Groq HTTP error: status_code=%s error_type=%s",
+                e.response.status_code,
+                type(e).__name__,
+            )
             raise
         except Exception as e:
-            logger.error(f"Groq generate error: {type(e).__name__}: {e}")
+            logger.error("Groq generate error: %s", type(e).__name__)
             raise
 
     # ------------------------------------------------------------------
@@ -116,7 +120,14 @@ class GroqProvider(BaseLLMProvider):
                         except (json.JSONDecodeError, KeyError, IndexError):
                             continue
         except httpx.HTTPStatusError as e:
-            logger.error(f"Groq streaming error: {e.response.status_code}")
+            logger.error(
+                "Groq streaming HTTP error: status_code=%s error_type=%s",
+                e.response.status_code,
+                type(e).__name__,
+            )
+            raise
+        except Exception as e:
+            logger.error("Groq streaming error: %s", type(e).__name__)
             raise
 
     # ------------------------------------------------------------------
@@ -143,6 +154,9 @@ class GroqProvider(BaseLLMProvider):
                 "Groq does not provide embeddings — Ollama is required. "
                 f"Run: `ollama pull {self.ollama_embedding_model}`"
             )
+        except Exception as e:
+            logger.error("Groq embedding error: %s", type(e).__name__)
+            raise
         return embeddings
 
     @property

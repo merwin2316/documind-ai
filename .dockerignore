@@ -1,12 +1,27 @@
 # Ignore git directory
 .git
 .gitignore
+.agents
 
 # Ignore env files (Secrets should NOT be in the image)
-# .env
-# .env.local
-# .env.*
+.env
+.env.local
+.env.*
 !.env.example
+
+# Ignore virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Ignore databases and local storage
+*.db
+*.sqlite
+*.sqlite3
+storage/
+uploads/
+processed/
 
 # Ignore Python cache
 __pycache__
@@ -14,9 +29,11 @@ __pycache__
 *.pyo
 *.pyd
 
-# Ignore Frontend (Backend image doesn't need it)
+# Ignore Frontend and node_modules
 frontend
 newfrontend
+node_modules/
+*/node_modules/
 
 # Ignore Docker related
 Dockerfile

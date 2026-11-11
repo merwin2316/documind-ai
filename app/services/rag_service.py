@@ -215,7 +215,7 @@ class RAGService:
             chunks = await self.vector_store.search(
                 query=search_query,
                 user_id=user_id,
-                top_k=settings.TOP_K_RETRIEVAL,
+                top_k=1,
                 document_ids=document_ids
             )
             
@@ -223,7 +223,13 @@ class RAGService:
                 # Context Window Retrieval: Fetch neighbors for better context
                 chunks = await self._fetch_neighbor_chunks(chunks)
                 document_names = await self._get_document_names([chunk["document_id"] for chunk in chunks])
-                context = self._build_context_with_citations(chunks, document_names)
+                chunks = chunks[:3]
+
+            context = self._build_context_with_citations(chunks, document_names)
+
+            MAX_CONTEXT_CHARS = 6000
+            if len(context) > MAX_CONTEXT_CHARS:
+                context = context[:MAX_CONTEXT_CHARS]
         
         # Step 6: Answer Agent (ChatGPT-style generation)
         # Pass previous_answer if available (for content enhancement requests like "with year")
@@ -246,7 +252,9 @@ class RAGService:
                 # Log warning but don't modify answer (let LLM learn from feedback)
                 import logging
                 logger = logging.getLogger(__name__)
-                logger.warning(f"Document context was provided but no citations found in answer. Question: {question[:100]}")
+                logger.warning(
+                    "Document context was provided, but no citations were found in the answer."
+                )
         
         # Step 7: Extract and map citations (only if documents were used)
         return {
@@ -272,6 +280,13 @@ class RAGService:
         - {"type": "token", "content": "The"}
         - {"type": "result", "data": {...}} (final result)
         """
+        from app.utils.tracer import trace
+
+        trace("answer_question_stream ENTER",
+              question_len=len(question),
+              doc_filter_count=len(document_ids) if document_ids else 0,
+              has_previous_message=previous_message is not None)
+
         # Step 1: Intent & Format
         yield {"type": "status", "content": "Analyzing request..."}
         intent_result = await self.intent_agent.classify(
@@ -280,27 +295,34 @@ class RAGService:
             previous_active_entity=previous_active_entity,
             previous_message=previous_message
         )
-        
+
         intent = intent_result.get("intent", "content_query")
         topic = intent_result.get("topic", "general")
         active_entity = intent_result.get("active_entity", topic)
         is_follow_up = intent_result.get("is_follow_up", False)
         expected_format = intent_result.get("expected_format", "paragraph")
         needs_documents = intent_result.get("needs_documents", False)
-        
+
+        trace("INTENT RESULT",
+              intent=intent,
+              is_follow_up=is_follow_up,
+              expected_format=expected_format,
+              needs_documents=needs_documents)
+
         # Step 2: Simple Greetings
         if self._is_simple_greeting(question):
+            trace("BRANCH: simple_greeting")
             yield {"type": "status", "content": "Responding..."}
             user_documents = await self._get_user_documents(user_id)
             if user_documents:
-                document_names = [doc.get("name", "Unknown") for doc in user_documents]
-                answer = f"Hey there! 😄\n\nHere are the documents available in your system:\n\n" + "\n".join([f"- {name}" for name in document_names])
+                document_names_list = [doc.get("name", "Unknown") for doc in user_documents]
+                answer = f"Hey there! 😄\n\nHere are the documents available in your system:\n\n" + "\n".join([f"- {name}" for name in document_names_list])
             else:
                 answer = "Hey there! 😄\n\nYou don't have any documents uploaded yet. Upload PDF documents to get started!"
-                
+
             yield {"type": "token", "content": answer}
             yield {
-                "type": "result", 
+                "type": "result",
                 "data": {
                     "answer": answer,
                     "citations": [],
@@ -312,10 +334,11 @@ class RAGService:
 
         # Step 3: Document Vault
         if intent == "document_vault":
+            trace("BRANCH: document_vault")
             yield {"type": "status", "content": "Checking vault..."}
             user_documents = await self._get_user_documents(user_id)
             answer = await self._answer_about_document_vault(question, user_documents)
-            
+
             yield {"type": "token", "content": answer}
             yield {
                 "type": "result",
@@ -330,6 +353,7 @@ class RAGService:
 
         # Step 4: Follow-up Transformation
         if is_follow_up and previous_message:
+            trace("BRANCH: follow_up_transformation")
             yield {"type": "status", "content": "Transforming answer..."}
             transformation_type = self._classify_transformation_type(question)
             answer = await self.transform_agent.transform(
@@ -337,7 +361,7 @@ class RAGService:
                 transformation_type=transformation_type,
                 topic=topic if topic else previous_topic or "general"
             )
-            
+
             yield {"type": "token", "content": answer}
             yield {
                 "type": "result",
@@ -351,35 +375,57 @@ class RAGService:
             return
 
         # Step 5: Retrieval
+        trace("BRANCH: content_query / retrieval")
         context = ""
         chunks = []
         document_names = {}
-        
+
         if needs_documents:
             yield {"type": "status", "content": "Searching documents..."}
-            
+
             # Context Injection: Use active_entity to improve search relevance
             search_query = question
             if active_entity and active_entity.lower() != "general":
                 # Only prepend if entity isn't already in the question
                 if active_entity.lower() not in question.lower():
                     search_query = f"{active_entity} {question}"
-            
+
+            trace("VECTOR SEARCH",
+                  query_len=len(search_query),
+                  top_k=settings.TOP_K_RETRIEVAL,
+                  filter_applied=document_ids is not None)
+
             chunks = await self.vector_store.search(
                 query=search_query,
                 user_id=user_id,
                 top_k=settings.TOP_K_RETRIEVAL,
                 document_ids=document_ids
             )
-            
+
+            trace("VECTOR SEARCH RESULT",
+                  chunk_count=len(chunks),
+                  scores=[round(c["score"], 4) for c in chunks[:5]])
+
             if chunks:
                 chunks = await self._fetch_neighbor_chunks(chunks)
                 document_names = await self._get_document_names([chunk["document_id"] for chunk in chunks])
+                chunks = chunks[:3]
+
                 context = self._build_context_with_citations(chunks, document_names)
+
+                MAX_CONTEXT_CHARS = 6000
+                if len(context) > MAX_CONTEXT_CHARS:
+                  context = context[:MAX_CONTEXT_CHARS]
+                trace("CONTEXT BUILT",
+                      context_len=len(context),
+                      chunk_count=len(chunks))
+            else:
+                trace("WARNING: no chunks returned — LLM will have NO document context")
+        else:
+            trace("WARNING: needs_documents=False — skipping retrieval entirely")
 
         # Step 6: Generate Stream
         yield {"type": "status", "content": "Generating answer..."}
-        
         full_answer = ""
         async for token in self.answer_agent.generate_answer_stream(
             question=question,
@@ -392,12 +438,16 @@ class RAGService:
         ):
             full_answer += token
             yield {"type": "token", "content": token}
-        
+
         # Step 7: Citations
         citations = []
         if chunks and document_names:
             full_answer, citations = self._renumber_and_map_citations(full_answer, chunks, document_names)
-            
+
+        trace("answer_question_stream EXIT",
+              answer_len=len(full_answer),
+              citation_count=len(citations))
+
         yield {
             "type": "result",
             "data": {
@@ -448,13 +498,14 @@ class RAGService:
         Uses [N] format to instruct LLM to use inline citations.
         """
         context_parts = []
-        
+
         for idx, chunk in enumerate(chunks, start=1):
             doc_name = document_names.get(chunk["document_id"], "Unknown Document")
-            # Use [N] format in context to guide LLM citation behavior (standard format)
-            citation_text = f"[{idx}] {doc_name}, Page {chunk['page']}\nText: {chunk['text']}\n"
+            citation_text = (
+                f"[{idx}] {doc_name}, Page {chunk['page']}\n"
+                f"Text: {chunk['text']}\n"
+            )
             context_parts.append(citation_text)
-        
         return "\n".join(context_parts)
     
     def _determine_format_style(self, question: str) -> str:

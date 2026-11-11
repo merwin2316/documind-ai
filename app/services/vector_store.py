@@ -12,6 +12,7 @@ from qdrant_client.models import (
 from shared.llm.factory import get_llm_provider
 from config import settings
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,10 @@ class VectorStore:
                 pass
             else:
                 logger.warning(f"Unexpected error creating collection: {e}")
-        except Exception as e:
-            logger.warning(f"Error creating collection: {type(e).__name__}: {e}")
+        except Exception:
+            logger.exception("Error creating collection")
+            traceback.print_exc()
+            raise
 
         # Ensure payload indexes for filtering
         for field in ("user_id", "document_id"):
@@ -125,7 +128,10 @@ class VectorStore:
                 if points and points[0].vector:
                     query_embedding = points[0].vector
             except Exception as e:
-                logger.warning(f"Failed to fetch vector for chunk {chunk_id}: {e}")
+                logger.warning(
+                    "Failed to fetch vector. Error type: %s",
+                    type(e).__name__
+                )
 
         if query_embedding is None:
             if not query:
@@ -142,13 +148,14 @@ class VectorStore:
                 FieldCondition(key="document_id", match=MatchAny(any=document_ids))
             )
         query_filter = Filter(must=conditions)
-
-        results = await self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_embedding,
+        response = await self.client.query_points(
+           collection_name=self.collection_name,
+            query=query_embedding,
             query_filter=query_filter,
-            limit=top_k,
-        )
+             limit=top_k,
+          )
+
+        results = response.points
 
         return [
             {

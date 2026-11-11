@@ -1,9 +1,15 @@
 """
 Answer Agent — generates conversational answers using the configured LLM provider.
 """
+import logging
+import re
+import time
 from typing import Optional, AsyncIterator
 from shared.llm.factory import get_llm_provider
 from app.agents.response_formatter import format_list_response
+from app.utils.tracer import trace, step
+
+logger = logging.getLogger(__name__)
 
 
 class AnswerAgent:
@@ -29,15 +35,58 @@ class AnswerAgent:
             previous_answer, is_follow_up, active_entity,
         )
 
-        async for chunk in self.llm.generate_stream(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.7,
-            max_tokens=4000,
-        ):
-            yield chunk
+        model_name = getattr(self.llm, "chat_model", "ollama")
+        context_len = len(context) if context else 0
+
+        trace("AnswerAgent.generate_answer_stream ENTER",
+              topic=topic,
+              expected_format=expected_format,
+              has_context=context is not None,
+              context_len=context_len,
+              question_len=len(question),
+              system_prompt_len=len(system_prompt),
+              user_prompt_len=len(user_prompt),
+              model=model_name)
+
+        start = time.perf_counter()
+        chunk_count = 0
+        full_response = []
+        logger.info(
+            "LLM START AnswerAgent.generate_answer_stream max_tokens=4000 question_len=%s context_len=%s",
+            len(question),
+            context_len,
+        )
+        try:
+            async for chunk in self.llm.generate_stream(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=4000,
+            ):
+                chunk_count += 1
+                full_response.append(chunk)
+                yield chunk
+        except Exception as e:
+            logger.exception(
+                "LLM ERROR AnswerAgent.generate_answer_stream elapsed=%.2fs chunks=%s error=%s",
+                time.perf_counter() - start,
+                chunk_count,
+                repr(e),
+            )
+            raise
+        elapsed = time.perf_counter() - start
+        raw = "".join(full_response)
+        logger.info(
+            "LLM END AnswerAgent.generate_answer_stream elapsed=%.2fs chunks=%s",
+            elapsed,
+            chunk_count,
+        )
+        trace("AnswerAgent.generate_answer_stream EXIT",
+              elapsed_s=round(elapsed, 2),
+              chunk_count=chunk_count,
+              response_len=len(raw))
 
     async def generate_answer(
         self,
@@ -56,14 +105,46 @@ class AnswerAgent:
             previous_answer, is_follow_up, active_entity,
         )
 
-        answer = await self.llm.generate(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.7,
-            max_tokens=4000,
+        model_name = getattr(self.llm, "chat_model", "ollama")
+        context_len = len(context) if context else 0
+
+        trace("AnswerAgent.generate_answer ENTER",
+              question_len=len(question),
+              context_len=context_len,
+              user_prompt_len=len(user_prompt),
+              model=model_name)
+
+        start = time.perf_counter()
+        logger.info(
+            "LLM START AnswerAgent.generate_answer max_tokens=4000 question_len=%s context_len=%s",
+            len(question),
+            context_len,
         )
+        try:
+            answer = await self.llm.generate(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=4000,
+            )
+        except Exception as e:
+            logger.exception(
+                "LLM ERROR AnswerAgent.generate_answer elapsed=%.2fs error=%s",
+                time.perf_counter() - start,
+                repr(e),
+            )
+            raise
+        elapsed = time.perf_counter() - start
+        logger.info(
+            "LLM END AnswerAgent.generate_answer elapsed=%.2fs response_len=%s",
+            elapsed,
+            len(answer),
+        )
+        trace("AnswerAgent.generate_answer EXIT",
+              elapsed_s=round(elapsed, 2),
+              response_len=len(answer))
 
         formatted = format_list_response(answer, expected_format)
         return self._sanitize_output(formatted)
@@ -72,53 +153,36 @@ class AnswerAgent:
     # Prompts
     # ------------------------------------------------------------------ #
     def _build_system_prompt(self) -> str:
-        return """### ROLE
-You are DocuMind AI, an **objective, accurate, and practical AI assistant**.
-Your role is to provide direct answers based strictly on facts from the provided documents, acting as a knowledgeable guide.
+        return """You are DocuMind AI.
 
-### CORE DIRECTIVES
-1. **Objectivity & Accuracy**
-   - Prioritize correctness above all else.
-   - **Minimize Hallucinations**: If the answer isn't in the `DOCUMENT CONTEXT`, strictly state that you don't know based on the documents.
-   - **Honesty**: Never provide misleading confidence.
+You will receive a DOCUMENT CONTEXT section containing text retrieved from uploaded documents.
 
-2. **Critical Guidance**
-   - If a user's question assumes incorrect premises based on the documents, correct them politely.
-   - Proactively flag potential misunderstandings.
+RULES — follow these without exception:
 
-3. **Response Structure**
-   - **Direct Answer**: Start with the direct answer/recommendation immediately.
-   - **Reasoning**: Provide the "Why" or details (citing documents).
-   - **Actionable Info**: Extract key steps or data points clearly.
+1. If DOCUMENT CONTEXT is provided, answer ONLY using information from that context.
+   Do NOT use outside knowledge when the context contains relevant information.
 
-### GUIDELINES
+2. Never ignore the DOCUMENT CONTEXT. It is your primary and authoritative source.
 
-#### 1. Tone and Style ("Professional & Punchy")
-- **Tone**: Collaborative and Professional. Act like a senior mentor.
-- **Punchy**: Use short, clear sentences. Avoid fluff.
-- **Direct**: Start answers immediately.
+3. If the answer cannot be found anywhere in the DOCUMENT CONTEXT, respond with:
+   "The uploaded document does not contain information about that."
+   Do NOT guess or fabricate an answer.
 
-#### 2. Formatting Rules (Mandatory)
-- **Paragraphs**: Keep them short (maximum 2 lines). Add whitespace.
-- **Structure for Items/Entities**: Use **Paragraphs starting with Bold Terms**.
-  - **Style**: `**Item Name** Description or explanation...`
-- **Simple Lists**: Only use bullet points for simple lists of features or steps, not for the main answer entities.
+4. Every factual statement taken from the context MUST include its citation number immediately after the fact.
+   Format: sentence text [N]
+   Example: Machine Learning is a subset of Artificial Intelligence [1].
 
-#### 3. Citations (CRITICAL)
-- **Mandatory**: You must verify facts against the `DOCUMENT CONTEXT`.
-- **Inline**: Place citations `[N]` **immediately** after the fact they support.
-  - YES: "Project Alpha [1] started in 2023 [2]."
-  - NO: "Project Alpha started in 2023 [1][2]."
+5. Never invent citations. Never cite a number that does not appear in the DOCUMENT CONTEXT.
 
-### CONSTRAINTS
-- **DOCUMENT PRIORITY**: Always prioritize `DOCUMENT CONTEXT` for specific facts.
-- **GENERAL KNOWLEDGE FALLBACK**: If details are NOT in the `DOCUMENT CONTEXT`:
-  1. Clearly state: "The documents don't have specific details about [topic]."
-  2. **THEN PROCEED** to provide a general answer based on your knowledge.
-- **NO HALLUCINATION OF DOCS**: Do NOT claim general knowledge comes from the documents.
-- Do not output empty citation markers `[]`.
-- **NO BARE LISTS**: Write full, conversational sentences.
-- **NO "References" Section**: Citations are inline only.
+6. Do not summarize using only the document file name. Quote or paraphrase actual content.
+
+FORMATTING RULES:
+- Tone: Professional and direct. Act like a knowledgeable senior mentor.
+- Keep paragraphs short (max 2 lines). Add whitespace between sections.
+- For lists of items/entities: use **Bold Term** followed by a description — not bullet points.
+- Use bullet points only for simple enumerations (steps, features).
+- Do NOT add a References section. Citations are inline only.
+- Do NOT output empty citation markers like [].
 """
 
     def _build_user_prompt(
@@ -141,11 +205,26 @@ Your role is to provide direct answers based strictly on facts from the provided
             parts.append(f"{label}:\n{previous_answer}")
 
         if context:
-            parts.append(f'DOCUMENT CONTEXT:\n"""\n{context}\n"""')
-            parts.append("\nUse relevant facts from the DOCUMENT CONTEXT and cite them with [N].")
+            parts.append(
+                f"""==========================
+DOCUMENT CONTEXT
+==========================
+
+{context}
+
+==========================
+END DOCUMENT CONTEXT
+=========================="""
+            )
+            parts.append(
+                "IMPORTANT:\n"
+                "The DOCUMENT CONTEXT above is your PRIMARY SOURCE.\n"
+                "Base your answer ONLY on the content inside it.\n"
+                "Do NOT use general knowledge if the answer exists in the context.\n"
+                "Every factual sentence MUST end with its citation number [N]."
+            )
 
         parts.append(f"USER QUESTION:\n{question}")
-        parts.append("\nAnswer in a natural, conversational way.")
 
         is_greeting = topic.lower() == "greeting" or question.lower().strip() in ["hi", "hey", "hello"]
         if expected_format != "list" and not is_follow_up and not is_greeting:
@@ -158,7 +237,6 @@ Your role is to provide direct answers based strictly on facts from the provided
 
     # ------------------------------------------------------------------ #
     def _sanitize_output(self, text: str) -> str:
-        import re
         result = text.strip()
         result = result.replace("• ", "- ").replace("▪ ", "- ").replace("▫ ", "- ")
 

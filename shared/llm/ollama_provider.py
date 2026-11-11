@@ -4,6 +4,7 @@ Connects to a running Ollama instance at http://localhost:11434.
 """
 import json
 import logging
+import time
 from typing import AsyncIterator, List, Dict
 import httpx
 from shared.llm.base import BaseLLMProvider
@@ -49,23 +50,26 @@ class OllamaProvider(BaseLLMProvider):
 
         try:
             async with httpx.AsyncClient(timeout=None) as client:
-                print("Calling Ollama...")
-                logger.warning("=" * 80)
-                logger.warning(f"URL: {self.base_url}/api/chat")
-                logger.warning(f"MODEL: {self.chat_model}")
-                logger.warning(f"JSON MODE: {json_mode}")
-                logger.warning(messages)
-                logger.warning("=" * 80)
-                import time
                 start = time.time()
+                logger.info(
+                    "LLM HTTP START OllamaProvider.generate url=%s model=%s json_mode=%s max_tokens=%s messages=%s",
+                    f"{self.base_url}/api/chat",
+                    self.chat_model,
+                    json_mode,
+                    max_tokens,
+                    len(messages),
+                )
                 resp = await client.post(
                     f"{self.base_url}/api/chat",
                     json=payload,
                 )
                 resp.raise_for_status()
-                print(f"Ollama took {time.time()-start:.2f} sec")
-                print(f"Ollama took {time.time()-start:.2f} sec")
-                logger.warning("OLLAMA RETURNED SUCCESS")
+                logger.info(
+                    "LLM HTTP END OllamaProvider.generate elapsed=%.2fs status=%s bytes=%s",
+                    time.time() - start,
+                    resp.status_code,
+                    len(resp.content),
+                )
                 data = resp.json()
                 return data["message"]["content"]
         except httpx.ConnectError:
@@ -74,10 +78,14 @@ class OllamaProvider(BaseLLMProvider):
                 "Make sure Ollama is running: `ollama serve`"
             )
         except httpx.HTTPStatusError as e:
-            logger.error(f"Ollama HTTP error: {e.response.status_code} — {e.response.text[:500]}")
+            logger.error(
+                "Ollama HTTP error: status_code=%s error_type=%s",
+                e.response.status_code,
+                type(e).__name__,
+            )
             raise
         except Exception as e:
-            logger.error(f"Ollama generate error: {type(e).__name__}: {e}")
+            logger.exception("Ollama generate error: %s", type(e).__name__)
             raise
 
     # ------------------------------------------------------------------
@@ -101,7 +109,15 @@ class OllamaProvider(BaseLLMProvider):
 
         try:
             async with httpx.AsyncClient(timeout=None) as client:
-                print("Calling Ollama...")
+                start = time.perf_counter()
+                line_count = 0
+                logger.info(
+                    "LLM HTTP START OllamaProvider.generate_stream url=%s model=%s max_tokens=%s messages=%s",
+                    f"{self.base_url}/api/chat",
+                    self.chat_model,
+                    max_tokens,
+                    len(messages),
+                )
                 async with client.stream(
                     "POST",
                     f"{self.base_url}/api/chat",
@@ -111,6 +127,7 @@ class OllamaProvider(BaseLLMProvider):
                     async for line in resp.aiter_lines():
                         if not line:
                             continue
+                        line_count += 1
                         try:
                             chunk = json.loads(line)
                             content = chunk.get("message", {}).get("content", "")
@@ -118,11 +135,27 @@ class OllamaProvider(BaseLLMProvider):
                                 yield content
                         except json.JSONDecodeError:
                             continue
+                logger.info(
+                    "LLM HTTP END OllamaProvider.generate_stream elapsed=%.2fs status=%s lines=%s",
+                    time.perf_counter() - start,
+                    resp.status_code,
+                    line_count,
+                )
         except httpx.ConnectError:
             raise ConnectionError(
                 f"Cannot connect to Ollama at {self.base_url}. "
                 "Make sure Ollama is running: `ollama serve`"
             )
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "Ollama streaming HTTP error: status_code=%s error_type=%s",
+                e.response.status_code,
+                type(e).__name__,
+            )
+            raise
+        except Exception as e:
+            logger.exception("Ollama generate_stream error: %s", type(e).__name__)
+            raise
 
     # ------------------------------------------------------------------
     # Embeddings
@@ -131,14 +164,29 @@ class OllamaProvider(BaseLLMProvider):
         embeddings: List[List[float]] = []
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                for text in texts:
-                    logger.warning(f"Ollama URL: {self.base_url}/api/chat")
-                    logger.warning(f"Payload: {payload}")
+                for index, text in enumerate(texts):
+                    start = time.perf_counter()
+                    logger.info(
+                        "LLM HTTP START OllamaProvider.create_embeddings index=%s/%s url=%s model=%s text_len=%s",
+                        index + 1,
+                        len(texts),
+                        f"{self.base_url}/api/embed",
+                        self.embedding_model,
+                        len(text),
+                    )
                     resp = await client.post(
                         f"{self.base_url}/api/embed",
                         json={"model": self.embedding_model, "input": text},
                     )
                     resp.raise_for_status()
+                    logger.info(
+                        "LLM HTTP END OllamaProvider.create_embeddings index=%s/%s elapsed=%.2fs status=%s bytes=%s",
+                        index + 1,
+                        len(texts),
+                        time.perf_counter() - start,
+                        resp.status_code,
+                        len(resp.content),
+                    )
                     data = resp.json()
                     emb = data.get("embeddings", [[]])[0]
                     embeddings.append(emb)
@@ -152,6 +200,9 @@ class OllamaProvider(BaseLLMProvider):
                 "Make sure Ollama is running and the embedding model is pulled: "
                 f"`ollama pull {self.embedding_model}`"
             )
+        except Exception as e:
+            logger.exception("Ollama create_embeddings error: %s", type(e).__name__)
+            raise
         return embeddings
 
     @property

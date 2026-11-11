@@ -2,9 +2,15 @@
 Intent & Format Agent — classifies user intent and determines formatting.
 Outputs JSON only, no natural language.
 """
+
 import json
+import logging
+import time
 from typing import Dict, Optional
 from shared.llm.factory import get_llm_provider
+from app.utils.tracer import trace, step
+
+logger = logging.getLogger(__name__)
 
 
 class IntentAgent:
@@ -42,6 +48,9 @@ Definitions:
 - "document_vault" — asking to LIST files or check FILENAMES (metadata only)
 - "follow_up" — formatting/transformation of previous answer (e.g. "list them", "shorten")
 
+IMPORTANT — "summarize", "explain", "what does the document say" are ALWAYS "content_query" with needs_documents=true.
+"document_vault" is ONLY for questions like "what files do I have?" or "list my documents".
+
 active_entity rules:
 - If user mentions a named entity, extract it
 - If user uses pronouns (he, she, they, it), resolve from previous_active_entity or previous_message
@@ -53,6 +62,7 @@ is_follow_up rules:
 
 needs_documents rules:
 - true for content queries about features, requirements, details, summaries, tech stack, etc.
+- true for ANY request to summarize or explain the uploaded document
 - false for pure greetings, formatting transformations, vault queries, small talk
 - DEFAULT: if in doubt, set true
 
@@ -74,48 +84,79 @@ Return JSON:
             parts.append(f"PREVIOUS ACTIVE ENTITY: {previous_active_entity}")
         if previous_message:
             parts.append(f"PREVIOUS ASSISTANT MESSAGE:\n{previous_message}")
-        parts.extend([
-            "",
-            "Analyze the message and return JSON only.",
-            "Resolve pronouns using context above.",
-        ])
+        parts.extend(
+            [
+                "",
+                "Analyze the message and return JSON only.",
+                "Resolve pronouns using context above.",
+            ]
+        )
 
         user_prompt = "\n".join(parts)
 
-        print("=" * 100)
-        print(system_prompt)
-        print("=" * 100)
-        print(user_prompt)
-        print("=" * 100)
-        
-        print("=" * 100)
-        print(system_prompt)    
-        print("=" * 100)
-        print(user_prompt)
-        print("=" * 100)
-        response = await self.llm.generate(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=200,
-            json_mode=True,
-        )
+        with step("IntentAgent.classify", message_len=len(user_message)):
+            trace(
+                "PROMPT",
+                system_prompt_len=len(system_prompt),
+                user_prompt_len=len(user_prompt),
+                model=getattr(self.llm, "chat_model", "ollama"),
+            )
 
-        result_json = json.loads(response)
+            t0 = time.perf_counter()
+            logger.info(
+                "LLM START IntentAgent.classify json_mode=True max_tokens=200 message_len=%s",
+                len(user_message),
+            )
+            try:
+                response = await self.llm.generate(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.1,
+                    max_tokens=200,
+                    json_mode=True,
+                )
+            except Exception as e:
+                logger.exception(
+                    "LLM ERROR IntentAgent.classify elapsed=%.2fs error=%s",
+                    time.perf_counter() - t0,
+                    repr(e),
+                )
+                raise
+            elapsed = time.perf_counter() - t0
+            logger.info(
+                "LLM END IntentAgent.classify elapsed=%.2fs response_len=%s",
+                elapsed,
+                len(response),
+            )
 
-        # Validate required fields
-        defaults = {
-            "intent": "content_query",
-            "topic": "general",
-            "active_entity": previous_active_entity or "general",
-            "is_follow_up": False,
-            "expected_format": "paragraph",
-            "needs_documents": False,
-        }
-        for key, default in defaults.items():
-            if key not in result_json:
-                result_json[key] = default
+            trace(
+                "RAW LLM RESPONSE",
+                elapsed_s=round(elapsed, 2),
+                response_len=len(response),
+            )
 
-        return result_json
+            result_json = json.loads(response)
+
+            # Validate required fields
+            defaults = {
+                "intent": "content_query",
+                "topic": "general",
+                "active_entity": previous_active_entity or "general",
+                "is_follow_up": False,
+                "expected_format": "paragraph",
+                "needs_documents": False,
+            }
+            for key, default in defaults.items():
+                if key not in result_json:
+                    result_json[key] = default
+
+            trace(
+                "FINAL INTENT RESULT",
+                intent=result_json.get("intent"),
+                is_follow_up=result_json.get("is_follow_up"),
+                expected_format=result_json.get("expected_format"),
+                needs_documents=result_json.get("needs_documents"),
+            )
+            return result_json

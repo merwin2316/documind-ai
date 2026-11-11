@@ -46,9 +46,9 @@ class Settings(BaseSettings):
     # -----------------------------
     # RAG Configuration
     # -----------------------------
-    CHUNK_SIZE: int = 800
-    CHUNK_OVERLAP: int = 150
-    TOP_K_RETRIEVAL: int = 10
+    CHUNK_SIZE: int = 350
+    CHUNK_OVERLAP: int = 60
+    TOP_K_RETRIEVAL: int = 2
     CHUNK_METHOD: str = "token"
     SEMANTIC_SPLITTING: bool = True
 

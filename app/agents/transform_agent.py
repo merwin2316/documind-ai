@@ -2,8 +2,12 @@
 Transformation Agent — reformats previous answers based on user commands.
 Only reformats, never adds new information.
 """
+import logging
 import re
+import time
 from shared.llm.factory import get_llm_provider
+
+logger = logging.getLogger(__name__)
 
 
 class TransformAgent:
@@ -60,13 +64,32 @@ USER INSTRUCTION:
 
 Transform the previous response. Do NOT add new information."""
 
-        response = await self.llm.generate(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=500,
+        start = time.perf_counter()
+        logger.info(
+            "LLM START TransformAgent.transform max_tokens=500 transformation_type=%s previous_len=%s",
+            transformation_type,
+            len(previous_answer),
+        )
+        try:
+            response = await self.llm.generate(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=500,
+            )
+        except Exception as e:
+            logger.exception(
+                "LLM ERROR TransformAgent.transform elapsed=%.2fs error=%s",
+                time.perf_counter() - start,
+                repr(e),
+            )
+            raise
+        logger.info(
+            "LLM END TransformAgent.transform elapsed=%.2fs response_len=%s",
+            time.perf_counter() - start,
+            len(response),
         )
 
         return self._sanitize_output(response)

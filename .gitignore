@@ -58,6 +58,7 @@ uploads/
 processed/
 storage/
 *.db
+.agents/
 
 # Frontend
 frontend/node_modules/
