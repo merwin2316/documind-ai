@@ -10,8 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -63,3 +63,4 @@ storage/
 # Frontend
 frontend/node_modules/
 frontend/.next/
+!frontend/src/lib/
