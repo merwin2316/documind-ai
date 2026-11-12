@@ -1,41 +1,29 @@
 /**
- * Supabase stub — no-op module for local-only mode.
- * All auth methods return dummy values so components that
- * still reference supabase.auth.* don't crash.
+ * Supabase Auth client for DocuMind AI (Next.js 16 + @supabase/ssr).
+ * Manages user sessions, token storage, and authentication state.
  */
+import { createBrowserClient } from "@supabase/ssr";
 
-const noopAuth = {
-  getSession: async () => ({
-    data: { session: null },
-    error: null,
-  }),
-  getUser: async () => ({
-    data: { user: null },
-    error: null,
-  }),
-  signOut: async () => ({ error: null }),
-  signInWithPassword: async () => ({
-    data: { session: null, user: null },
-    error: null,
-  }),
-  signUp: async () => ({
-    data: { session: null, user: null },
-    error: null,
-  }),
-  onAuthStateChange: (_callback: any) => ({
-    data: {
-      subscription: {
-        unsubscribe: () => {},
-      },
-    },
-  }),
-};
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
-export const supabase = {
-  auth: noopAuth,
-  storage: {
-    from_: () => ({
-      createSignedUrl: async () => ({ data: null, error: new Error("Local mode") }),
-    }),
+export const isSupabaseConfigured = Boolean(
+  supabaseUrl &&
+  supabaseAnonKey &&
+  supabaseUrl.startsWith("http") &&
+  !supabaseUrl.includes("placeholder")
+);
+
+// Fallback to a placeholder URL/key if not configured to prevent client instantiation crashes
+const effectiveUrl = isSupabaseConfigured ? supabaseUrl : "https://placeholder.supabase.co";
+const effectiveKey = isSupabaseConfigured ? supabaseAnonKey : "placeholder-anon-key";
+
+export const supabase = createBrowserClient(effectiveUrl, effectiveKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
   },
-};
+});
+
+export default supabase;

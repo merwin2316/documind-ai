@@ -29,6 +29,7 @@ import { FileText, Upload, MessageSquare, Loader2, CheckCircle2, Trash2, XCircle
 import { motion } from "framer-motion";
 import { useDocumentStatus } from "@/hooks/useDocumentStatus";
 import { AppSidebar } from "@/components/AppSidebar";
+import { AuthGuard } from "@/components/AuthGuard";
 
 export default function VaultPage() {
     const router = useRouter();
@@ -243,7 +244,8 @@ export default function VaultPage() {
 
 
     return (
-        <div className="flex h-screen bg-[#0A0A0B] text-white overflow-hidden">
+        <AuthGuard>
+            <div className="flex h-screen bg-[#0A0A0B] text-white overflow-hidden">
             {/* Sidebar */}
             <AppSidebar
                 currentConversationId={null}
@@ -464,5 +466,6 @@ export default function VaultPage() {
                 </div>
             </div>
         </div>
-    );
+    </AuthGuard>
+);
 }

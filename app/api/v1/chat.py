@@ -76,6 +76,15 @@ async def create_chat_message(
         if msgs:
             previous_message = msgs[-1].get("assistant_message")
 
+    # Validate that all requested document_ids belong to the authenticated user
+    if message_data.document_ids:
+        for doc_id in message_data.document_ids:
+            if not db.get_document(doc_id, current_user.user_id):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Document {doc_id} not found or not owned by you",
+                )
+
     # RAG processing
     rag_service = RAGService()
     try:

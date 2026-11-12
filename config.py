@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     FRONTEND_URL: Optional[str] = None
 
     # -----------------------------
+    # Authentication & Supabase
+    # -----------------------------
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_ANON_KEY: Optional[str] = None
+    SUPABASE_JWT_SECRET: Optional[str] = None
+    SUPABASE_JWT_ALGORITHM: str = "HS256"
+    SUPABASE_JWT_AUDIENCE: str = "authenticated"
+    ALLOW_DEV_AUTH: bool = False           # Strict: explicit opt-in for local dev testing
+    ENABLE_RESET_ENDPOINT: bool = False    # Strict: destructive /reset disabled by default
+
+    # -----------------------------
     # Database (SQLite — no setup needed)
     # -----------------------------
     DATABASE_URL: str = "sqlite:///./documind.db"

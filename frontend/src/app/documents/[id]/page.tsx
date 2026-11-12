@@ -6,6 +6,7 @@ import { fetchWithAuth, getDocumentDownloadUrl } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Download, FileText, Loader2 } from "lucide-react";
+import { AuthGuard } from "@/components/AuthGuard";
 
 export default function DocumentViewerPage() {
     const router = useRouter();
@@ -94,7 +95,8 @@ export default function DocumentViewerPage() {
     }
 
     return (
-        <div className="min-h-screen bg-[#0A0A0B] text-white">
+        <AuthGuard>
+            <div className="min-h-screen bg-[#0A0A0B] text-white">
             {/* Header */}
             <div className="border-b border-white/[0.1] bg-white/[0.02] sticky top-0 z-10">
                 <div className="max-w-7xl mx-auto px-6 py-4">
@@ -201,5 +203,6 @@ export default function DocumentViewerPage() {
                 </Card>
             </div>
         </div>
-    );
+    </AuthGuard>
+);
 }

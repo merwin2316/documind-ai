@@ -1,26 +1,49 @@
 /**
  * API client for DocuMind AI backend.
- * Local mode — no Authorization headers needed.
+ * Automatically attaches Supabase Auth Bearer access tokens to all requests.
  */
+import { supabase } from "@/lib/supabase";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 /**
+ * Retrieve current Supabase access token.
+ */
+export async function getAuthToken(): Promise<string | null> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      return session.access_token;
+    }
+  } catch (err) {
+    console.warn("Failed to retrieve Supabase session token:", err);
+  }
+  return null;
+}
+
+/**
  * Fetch wrapper for authenticated API calls.
- * In local mode, no Authorization header is sent.
+ * Automatically injects the Supabase Bearer token if present.
  */
 export async function fetchWithAuth(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<any> {
   const url = endpoint.startsWith("http") ? endpoint : `${API_URL}${endpoint}`;
+  const token = await getAuthToken();
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string> || {}),
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
 
   const response = await fetch(url, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -28,6 +51,11 @@ export async function fetchWithAuth(
     throw new Error(
       errorData.detail || `API error: ${response.status} ${response.statusText}`
     );
+  }
+
+  // Handle 204 No Content
+  if (response.status === 204) {
+    return null;
   }
 
   return response.json();
@@ -47,11 +75,7 @@ export async function getDocument(documentId: string): Promise<any> {
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {
-  const url = `${API_URL}/documents/${documentId}`;
-  const response = await fetch(url, { method: "DELETE" });
-  if (!response.ok && response.status !== 204) {
-    throw new Error(`Failed to delete document: ${response.statusText}`);
-  }
+  await fetchWithAuth(`/documents/${documentId}`, { method: "DELETE" });
 }
 
 export async function uploadFileWithAuth(endpointOrFile: string | File, maybeFile?: File): Promise<any> {
@@ -61,10 +85,17 @@ export async function uploadFileWithAuth(endpointOrFile: string | File, maybeFil
   const formData = new FormData();
   formData.append("file", file);
 
+  const token = await getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const response = await fetch(url, {
     method: "POST",
+    headers,
     body: formData,
-    // No Content-Type header — browser sets it with boundary for multipart
+    // Note: Do not set Content-Type header — browser automatically sets boundary for multipart
   });
 
   if (!response.ok) {
@@ -105,10 +136,18 @@ export async function sendChatMessageStream(payload: {
   document_ids: string[] | null;
 }): Promise<Response> {
   const url = `${API_URL}/chat/stream`;
+  const token = await getAuthToken();
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
 
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
   });
 
@@ -141,11 +180,7 @@ export async function getConversation(conversationId: string): Promise<any> {
 export async function deleteConversation(
   conversationId: string
 ): Promise<void> {
-  const url = `${API_URL}/chat/conversations/${conversationId}`;
-  const response = await fetch(url, { method: "DELETE" });
-  if (!response.ok && response.status !== 204) {
-    throw new Error(`Failed to delete conversation: ${response.statusText}`);
-  }
+  await fetchWithAuth(`/chat/conversations/${conversationId}`, { method: "DELETE" });
 }
 
 export async function updateConversation(
@@ -167,8 +202,8 @@ export async function listFolders(): Promise<any[]> {
 }
 
 export async function createFolder(
-  nameOrPayload: string | { name: string; parent_id?: string },
-  parentId?: string
+  _nameOrPayload: string | { name: string; parent_id?: string },
+  _parentId?: string
 ): Promise<any> {
   return {};
 }

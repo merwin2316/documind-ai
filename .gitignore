@@ -59,6 +59,7 @@ processed/
 storage/
 *.db
 .agents/
+scratch/
 
 # Frontend
 frontend/node_modules/

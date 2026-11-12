@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AppSidebar } from "@/components/AppSidebar";
+import { AuthGuard } from "@/components/AuthGuard";
 
 interface Category {
     name: string;
@@ -120,7 +121,8 @@ export default function KnowledgeBasePage() {
     const hasActiveFilters = selectedCategory || selectedTags.length > 0 || searchQuery;
 
     return (
-        <div className="flex h-screen bg-[#0A0A0B] text-white">
+        <AuthGuard>
+            <div className="flex h-screen bg-[#0A0A0B] text-white">
             {/* App Sidebar */}
             <AppSidebar
                 currentConversationId={null}
@@ -308,7 +310,8 @@ export default function KnowledgeBasePage() {
                 </div>
             </div>
         </div>
-    );
+    </AuthGuard>
+);
 }
 
 function DocumentCard({ document }: { document: Document }) {

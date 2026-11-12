@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getAuthToken } from '@/lib/api';
 
 export type DocumentStatus = 'processing' | 'ready' | 'error';
 
@@ -50,11 +51,18 @@ export function useDocumentStatus(options: UseDocumentStatusOptions = {}) {
     };
 
     // Try to connect via WebSocket
-    const connectWebSocket = () => {
+    const connectWebSocket = async () => {
         if (!enabled) return;
 
         try {
-            // Get WebSocket URL from environment or construct from API URL
+            const token = await getAuthToken();
+            if (!token) {
+                // If unauthenticated, do not establish socket connection
+                setUsePolling(true);
+                return;
+            }
+
+            // Get WebSocket URL from environment or construct from API URL (no token in query params)
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsHost = process.env.NEXT_PUBLIC_WS_URL ||
                 `${wsProtocol}//${window.location.hostname}:8000`;
@@ -68,8 +76,8 @@ export function useDocumentStatus(options: UseDocumentStatusOptions = {}) {
                 setConnectionStatus('connected');
                 setUsePolling(false);
 
-                // Send authentication message (local mode - static token)
-                ws.send(JSON.stringify({ type: 'auth', token: 'local' }));
+                // Send authentication message securely via WebSocket frame
+                ws.send(JSON.stringify({ type: 'auth', token }));
             };
 
             ws.onmessage = (event) => {

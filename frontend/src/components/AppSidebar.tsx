@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { listConversations } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { motion } from "framer-motion";
 
 interface Conversation {
@@ -37,6 +38,7 @@ export function AppSidebar({
 }: AppSidebarProps) {
     const router = useRouter();
     const pathname = usePathname();
+    const { user, signOut } = useAuth();
     const [conversations, setConversations] = useState<Conversation[]>([]);
 
     useEffect(() => {
@@ -63,7 +65,7 @@ export function AppSidebar({
     };
 
     const handleSignOut = async () => {
-        router.push("/chat");
+        await signOut();
     };
 
     const groupConversations = () => {
@@ -210,11 +212,17 @@ export function AppSidebar({
                 </div>
             </div>
 
-            {/* Sign Out */}
-            <div className="p-3 border-t border-white/5">
+            {/* User Profile & Sign Out */}
+            <div className="p-3 border-t border-white/5 space-y-2">
+                {user?.email && (
+                    <div className="flex items-center gap-2.5 px-3 py-1.5 text-xs text-white/50 truncate">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                        <span className="truncate">{user.email}</span>
+                    </div>
+                )}
                 <button
                     onClick={handleSignOut}
-                    className="flex items-center gap-3 px-3 py-2.5 text-[14px] font-medium rounded-lg transition-colors hover:bg-white/5 text-left w-full text-white/60 hover:text-white"
+                    className="flex items-center gap-3 px-3 py-2 text-[14px] font-medium rounded-lg transition-colors hover:bg-white/5 text-left w-full text-white/60 hover:text-white"
                 >
                     <LogOut className="w-4 h-4" strokeWidth={2} />
                     <span>Sign Out</span>

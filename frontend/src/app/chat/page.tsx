@@ -6,6 +6,7 @@ import { fetchWithAuth, getDocumentUrl, getDocumentDownloadUrl, API_URL, sendCha
 import { ChatSidebar } from "@/components/ui/GrokSidebar";
 
 import { AppSidebar } from "@/components/AppSidebar";
+import { AuthGuard } from "@/components/AuthGuard";
 import { DashboardHome } from "@/components/DashboardHome";
 import { AnimatedChatInput, TypingIndicator } from "@/components/AnimatedChatInput";
 import { Card, CardContent } from "@/components/ui/card";
@@ -957,7 +958,8 @@ export default function ChatPage() {
     };
 
     return (
-        <div className="flex h-screen bg-[#0A0A0B] text-white overflow-hidden">
+        <AuthGuard>
+            <div className="flex h-screen bg-[#0A0A0B] text-white overflow-hidden">
             {/* Sidebar */}
             {/* Sidebar */}
             <AppSidebar
@@ -1053,5 +1055,6 @@ export default function ChatPage() {
                 </AnimatePresence>
             </div>
         </div>
-    );
+    </AuthGuard>
+);
 }

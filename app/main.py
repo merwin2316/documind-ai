@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from app.api.v1 import router as api_v1_router
-from app.middleware.auth import get_current_user, DEV_USER_ID
+from app.middleware.auth import get_current_user, verify_jwt_token, DEV_USER_ID
 from app.models.user import User
 from config import settings
 from fastapi import WebSocket, WebSocketDisconnect
@@ -80,37 +80,96 @@ app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
 async def websocket_document_status(websocket: WebSocket):
     """
     WebSocket endpoint for real-time document processing status updates.
-    Local mode: auto-authenticates with dev user.
+    Enforces initial message-based authentication (bearer tokens in query params are strictly prohibited).
     """
+    import asyncio
     manager = get_connection_manager()
     await websocket.accept()
     
-    user_id = DEV_USER_ID
+    user_id = None
     try:
-        # Wait for initial message (client still sends auth format for compatibility)
-        auth_data = await websocket.receive_json()
-        
-        # In local mode, always accept and use dev user
+        # Require initial JSON auth frame within 5 seconds
+        try:
+            auth_frame = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("WebSocket connection timed out waiting for authentication frame")
+            try:
+                await websocket.send_json({"type": "error", "message": "Authentication timeout"})
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+            return
+        except Exception:
+            logger.warning("WebSocket initial frame was not valid JSON")
+            try:
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+            return
+
+        if not isinstance(auth_frame, dict) or auth_frame.get("type") != "auth":
+            logger.warning("WebSocket initial frame missing 'type': 'auth'")
+            try:
+                await websocket.send_json({"type": "error", "message": "First message must be an auth frame"})
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+            return
+
+        token = auth_frame.get("token")
+        if not token or not isinstance(token, str) or not token.strip():
+            logger.warning("WebSocket auth frame missing token")
+            try:
+                await websocket.send_json({"type": "error", "message": "Authentication token required"})
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+            return
+
+        try:
+            claims = verify_jwt_token(token)
+            user_id = claims["user_id"]
+        except HTTPException as e:
+            logger.warning(f"WebSocket authentication failed: {e.detail}")
+            try:
+                await websocket.send_json({"type": "error", "message": "Authentication failed"})
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            logger.warning(f"WebSocket authentication error: {type(e).__name__}")
+            try:
+                await websocket.send_json({"type": "error", "message": "Authentication failed"})
+                await websocket.close(code=1008)
+            except Exception:
+                pass
+            return
+
+        # Register connection for verified user ONLY
         await manager.register(websocket, user_id)
-        logger.info(f"User {user_id} connected to document status WebSocket")
+        await websocket.send_json({"type": "authenticated", "user_id": user_id})
+        logger.info(f"Verified user {user_id} connected to document status WebSocket")
         
         try:
             while True:
-                await websocket.receive_text()
+                msg = await websocket.receive_text()
+                if msg == "ping":
+                    await websocket.send_text("pong")
         except WebSocketDisconnect:
             manager.disconnect(websocket, user_id)
         except Exception as e:
-            logger.error(f"WebSocket connection error: {str(e)}")
+            logger.debug(f"WebSocket disconnect: {type(e).__name__}")
             manager.disconnect(websocket, user_id)
             
     except Exception as e:
-        logger.error(f"WebSocket handler error: {str(e)}")
+        logger.warning(f"WebSocket handler error: {type(e).__name__}")
         if user_id:
             manager.disconnect(websocket, user_id)
         try:
             if websocket.client_state.name != "DISCONNECTED":
                 await websocket.close(code=1011)
-        except:
+        except Exception:
             pass
 
 
@@ -137,8 +196,13 @@ async def health_check():
 async def reset_all_data(current_user: User = Depends(get_current_user)):
     """
     Reset endpoint: Delete all files and conversations for the current user.
-    Local SQLite mode only.
+    Strictly restricted: disabled by default, requires explicit ENABLE_RESET_ENDPOINT=True in development.
     """
+    if not settings.ENABLE_RESET_ENDPOINT or settings.ENVIRONMENT != "development":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Reset endpoint is disabled in this environment."
+        )
     from app.database.supabase_client import get_local_db
     from app.services.vector_store import VectorStore
     import shutil
