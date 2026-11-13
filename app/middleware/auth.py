@@ -154,22 +154,22 @@ def verify_jwt_token(token: str) -> Dict[str, Optional[str]]:
             payload = jwt.decode(token, signing_key.key, **kwargs)
         except (jwt.PyJWKClientError, jwt.PyJWTError) as jwks_err:
             logger.warning(f"JWKS verification failed ({type(jwks_err).__name__}): {jwks_err}")
-            # Optional fallback to Supabase Auth API if anon key is configured
-            if settings.SUPABASE_URL and settings.SUPABASE_ANON_KEY:
-                try:
-                    from supabase import create_client
-                    sb_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_ANON_KEY)
-                    user_response = sb_client.auth.get_user(token)
-                    if user_response and user_response.user:
-                        u = user_response.user
-                        return {"user_id": str(u.id), "email": u.email}
-                except Exception as api_err:
-                    logger.debug(f"Supabase auth API fallback failed: {api_err}")
-
             if isinstance(jwks_err, jwt.ExpiredSignatureError):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication token has expired",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            if isinstance(jwks_err, jwt.InvalidAudienceError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token audience is invalid",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            if isinstance(jwks_err, jwt.InvalidIssuerError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token issuer is invalid",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             raise HTTPException(
